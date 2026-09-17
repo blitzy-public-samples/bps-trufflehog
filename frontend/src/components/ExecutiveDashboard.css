@@ -1,0 +1,224 @@
+/* metric tiles */
+.dash-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.dash-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.dash-tile-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dash-tile-value {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  white-space: nowrap;
+}
+
+.dash-dot,
+.dash-swatch {
+  display: inline-block;
+  flex-shrink: 0;
+  width: var(--space-2);
+  height: var(--space-2);
+  vertical-align: middle;
+}
+
+.dash-dot--verified,
+.dash-swatch--verified {
+  background: var(--color-verified);
+}
+
+.dash-dot--unverified,
+.dash-swatch--unverified {
+  background: var(--color-unverified);
+}
+
+/* chart and triage progress row */
+.dash-row2 {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.dash-card-title {
+  margin-bottom: var(--space-4);
+  color: var(--color-text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+/* chart */
+.dash-chart-area {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-2);
+  height: var(--chart-height);
+}
+
+.dash-bar-col {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  min-width: 0;
+}
+
+.dash-bar-total {
+  margin-bottom: var(--space-1);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.dash-bar-stack {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: flex-end;
+  width: 100%;
+  min-height: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.dash-bar-seg--verified {
+  width: 100%;
+  background: var(--color-verified);
+}
+
+.dash-bar-seg--unverified {
+  width: 100%;
+  background: var(--color-unverified);
+}
+
+.dash-bar-label {
+  margin-top: var(--space-1);
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.dash-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.dash-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* triage progress */
+.dash-progress-value {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+}
+
+.dash-progress-caption {
+  margin: var(--space-1) 0 var(--space-4);
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+}
+
+.dash-progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: thin solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.dash-progress-row > :last-child {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-weight: var(--weight-semibold);
+}
+
+/* exposure */
+.dash-exposure {
+  display: flex;
+  flex-direction: column;
+}
+
+.dash-exposure-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 2fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+
+.dash-exposure-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-exposure-count {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  text-align: right;
+}
+
+.dash-exposure-track {
+  height: var(--space-2);
+  background: var(--color-surface-alt);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.dash-exposure-fill {
+  height: 100%;
+  background: var(--color-verified);
+  border-radius: var(--radius-sm);
+}
+
+.dash-link {
+  align-self: flex-start;
+  margin-top: var(--space-3);
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--color-link);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.dash-link:hover {
+  text-decoration: underline;
+}

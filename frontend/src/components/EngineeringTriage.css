@@ -1,0 +1,141 @@
+/* toolbar */
+.triage-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.triage-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.triage-segment {
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+  background: var(--color-surface);
+  border: thin solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.triage-segment-btn {
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.triage-segment-btn + .triage-segment-btn {
+  border-left: thin solid var(--color-border);
+}
+
+.triage-segment-btn:hover {
+  color: var(--color-text);
+}
+
+.triage-segment-btn--active {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+}
+
+.triage-count {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.triage-note {
+  margin-left: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+
+/* table */
+.triage-table-card {
+  padding: 0;
+  overflow-x: auto;
+}
+
+.triage-row {
+  height: var(--row-height-lg);
+}
+
+.triage-row > td {
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  vertical-align: middle;
+}
+
+.triage-row--muted {
+  opacity: 0.55;
+}
+
+.triage-open {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.triage-primary {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text);
+}
+
+.triage-secondary {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.triage-redacted {
+  display: block;
+  max-width: var(--layout-sidebar);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.triage-status-secondary {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.triage-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+.triage-empty,
+.triage-table-card td.triage-empty {
+  padding: var(--space-6) var(--space-5);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  text-align: center;
+}
