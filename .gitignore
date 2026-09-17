@@ -14,3 +14,10 @@ tmp/go-test.json
 # Python
 __pycache__/
 *.pyc
+
+# Results pipeline (backend/ + frontend/)
+backend/trufflehog.db
+backend/trufflehog.db-wal
+backend/trufflehog.db-shm
+.venv/
+node_modules/
