@@ -16,6 +16,7 @@ __pycache__/
 *.pyc
 
 # Results pipeline (backend/ + frontend/)
+
 backend/trufflehog.db
 backend/trufflehog.db-wal
 backend/trufflehog.db-shm
