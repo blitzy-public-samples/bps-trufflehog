@@ -51,7 +51,7 @@ async function request(path, init) {
   return await response.json();
 }
 
-/** POSTs target to /api/scans and returns the new running scan object. */
+/** POSTs target and source to /api/scans and returns the new running scan object. */
 export async function startScan(target, source = "git") {
   return request("/api/scans", {
     method: "POST",

@@ -66,8 +66,8 @@ print(%(second)s, flush=True)
 
 
 def _finding_line(file: str = "config.env") -> str:
-    """Returns one stdout line shaped like TruffleHog's git JSON output for this file path, carrying a
-    synthetic secret assembled at runtime."""
+    """Returns one TruffleHog-shaped JSON line for file, with its synthetic secret split across
+    source tokens."""
     secret = "ghp_" + "x" * 36
     return json.dumps(
         {
@@ -256,8 +256,8 @@ def test_run_scan_skips_unparseable_lines(db_path, caplog):
 
 
 def test_run_scan_commits_findings_while_running(db_path, tmp_path):
-    """Drives the scan worker on its own thread against a child that emits one finding, blocks, then
-    emits a second, and checks each finding is stored before the scan reaches a terminal status."""
+    """Runs a two-finding child and checks partial results are visible while the scan is running
+    and both findings are stored at completion."""
     db.init_db()
     release = tmp_path / "release-second-finding"
     scan_id = db.create_scan("fake", "git")["id"]
@@ -481,3 +481,95 @@ def test_run_scan_finalizes_when_the_stderr_drain_cannot_start(db_path, caplog):
     assert len(summaries) == 1, summaries
     assert "stderr_lines_drained=0" in summaries[0]
     assert STDERR_MARKER not in caplog.text
+
+
+# Split across source tokens like conftest's planted token, so no line here reads as a credential.
+MALFORMED_TARGET_CREDENTIAL = "n0t-a-real" + "-target-token"
+MALFORMED_CREDENTIAL_TARGETS = (
+    (f"https://user:{MALFORMED_TARGET_CREDENTIAL}@[bad/repo.git", "https://***@[bad/repo.git"),
+    (f"https:///user:{MALFORMED_TARGET_CREDENTIAL}@[bad/repo.git", "https:///***@[bad/repo.git"),
+    (f"user:{MALFORMED_TARGET_CREDENTIAL}@host:org//repo.git", "***@host:org//repo.git"),
+)
+
+
+def _settled_scan(client, scan_id: int) -> dict:
+    """Returns this scan's served row once its status is no longer 'running', failing the calling
+    test when it stays running past the streaming budget."""
+    deadline = time.monotonic() + STREAM_TIMEOUT_SECONDS
+    row = _served_scan(client, scan_id)
+    while row["status"] == "running" and time.monotonic() < deadline:
+        time.sleep(STREAM_POLL_SECONDS)
+        row = _served_scan(client, scan_id)
+    if row["status"] == "running":
+        pytest.fail(f"scan {scan_id} was still running after {STREAM_TIMEOUT_SECONDS}s")
+    return row
+
+
+@pytest.mark.parametrize(("target", "redacted"), MALFORMED_CREDENTIAL_TARGETS)
+def test_a_malformed_credential_target_is_redacted_in_every_sink(
+    client, monkeypatch, caplog, target, redacted
+):
+    """Starts a scan of a credential-bearing target no authority can be parsed from and checks the
+    userinfo reaches neither the 202 body, the served row, the stored row nor the log."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("TRUFFLEHOG_BIN", sys.executable)
+
+    response = client.post("/api/scans", json={"target": target})
+
+    assert response.status_code == 202, response.text
+    accepted = response.json()
+    scan_id = accepted["id"]
+    assert accepted["target"] == redacted, accepted
+    assert _served_scan(client, scan_id)["target"] == redacted
+    stored = _stored_scan(scan_id)
+    assert stored["target"] == redacted, stored
+
+    assert MALFORMED_TARGET_CREDENTIAL not in response.text, "the 202 body leaked the credential"
+    assert MALFORMED_TARGET_CREDENTIAL not in client.get("/api/scans").text, "GET leaked it"
+    assert MALFORMED_TARGET_CREDENTIAL not in json.dumps(stored), "the scans row leaked it"
+    assert MALFORMED_TARGET_CREDENTIAL not in caplog.text, "a log record leaked it"
+
+    starts = [
+        m
+        for m in _messages(caplog, logging.INFO)
+        if "starting scan" in m and f"scan_id={scan_id}" in m
+    ]
+    assert len(starts) == 1, f"expected one start record for scan {scan_id}, got {starts}"
+    assert redacted in starts[0], starts[0]
+
+    settled = _settled_scan(client, scan_id)
+    assert settled["status"] == "failed", settled
+    assert settled["target"] == redacted, settled
+
+
+FORGED_RECORD_TEXT = "ERROR forged record"
+CONTROL_CHARACTER_TARGET = f"file:///tmp/x\n{FORGED_RECORD_TEXT}\r\x1b[31m\u2028\u2029tail"
+RAW_CONTROL_CHARACTERS = ("\n", "\r", "\x1b", "\u2028", "\u2029")
+ESCAPED_CONTROL_SEQUENCES = ("\\n", "\\r", "\\x1b", "\\u2028", "\\u2029")
+
+
+def test_the_start_record_escapes_control_characters_in_a_target(db_path, caplog):
+    """Starts a worker on a target carrying newline, carriage-return, escape and Unicode separator
+    characters and checks the INFO start record escapes them onto its own single line."""
+    caplog.set_level(logging.INFO)
+    db.init_db()
+    scan_id = db.create_scan("fake", "git")["id"]
+
+    worker = scanner.start_scan(scan_id, "git", CONTROL_CHARACTER_TARGET, sys.executable)
+    worker.join(timeout=STREAM_TIMEOUT_SECONDS)
+    assert not worker.is_alive(), f"the scan worker ran past {STREAM_TIMEOUT_SECONDS}s"
+
+    starts = [m for m in _messages(caplog, logging.INFO) if "starting scan" in m]
+    assert len(starts) == 1, f"expected exactly one start record, got {starts}"
+    for character in RAW_CONTROL_CHARACTERS:
+        assert character not in starts[0], f"{character!r} reached the start record unescaped"
+    for sequence in ESCAPED_CONTROL_SEQUENCES:
+        assert sequence in starts[0], f"{sequence} is missing from the start record"
+    assert "'--'" in starts[0], f"the positional terminator is missing from {starts[0]}"
+
+    messages = [record.getMessage() for record in caplog.records]
+    forged = [m for m in messages if m.startswith(FORGED_RECORD_TEXT)]
+    assert forged == [], f"the target forged a log record: {forged}"
+    lines = caplog.text.splitlines()
+    forged_lines = [line for line in lines if line.startswith(FORGED_RECORD_TEXT)]
+    assert forged_lines == [], f"the target forged a log line: {forged_lines}"

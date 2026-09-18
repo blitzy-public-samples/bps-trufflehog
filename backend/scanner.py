@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -21,6 +22,8 @@ SECRET_KEYS = frozenset({"Raw", "RawV2", "SecretParts"})
 MASK_THRESHOLD = 12
 STDERR_JOIN_TIMEOUT = 5
 TERMINAL_RETRY_DELAY = 0.5
+USERINFO_MASK = "***@"
+CREDENTIAL_RUN = re.compile(r"[^/?#\s]*(?::|%3[aA])[^/?#\s]*@")
 
 
 class TrufflehogNotFoundError(RuntimeError):
@@ -40,13 +43,20 @@ def resolve_binary() -> str:
 
 def build_command(binary: str, source: str, target: str) -> list[str]:
     """Returns the argument list scanning target in JSON mode, where source is the subcommand
-    ("git" or "filesystem") and target its positional argument."""
-    return [binary, source, target, "--json", "--no-update"]
+    ("git" or "filesystem") and target its positional argument. The flags precede the "--"
+    terminator and target comes last, so a target beginning with "-" or "@" stays a positional."""
+    return [binary, source, "--json", "--no-update", "--", target]
+
+
+def command_log_line(cmd: list[str]) -> str:
+    """Returns cmd as one log-safe line by quoting and escaping each argument, so control or
+    line-separator characters in a target cannot forge or reshape a log record."""
+    return " ".join(repr(argument) for argument in cmd)
 
 
 def parse_line(line: str) -> dict | None:
-    """Returns the finding object decoded from one stdout line, or None when the line is blank,
-    malformed or valid JSON that is not an object."""
+    """Returns the JSON object decoded from one stdout line, or None when the line is blank,
+    malformed or valid JSON that is not an object; it does not check that the object is a finding."""
     text = line.strip()
     if not text:
         return None
@@ -57,17 +67,26 @@ def parse_line(line: str) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 
+def _mask_credential_runs(target: str) -> str:
+    """Returns target with every 'user:password@' run replaced by '***@'. It is used where no
+    authority can be located safely, so an ambiguous target is over-masked rather than left with a
+    credential in it; a run carrying no password, such as 'git@host:path', is untouched."""
+    return CREDENTIAL_RUN.sub(USERINFO_MASK, target)
+
+
 def redact_target(target: str) -> str:
-    """Returns target with any URL userinfo replaced by '***@'; input without userinfo, or input that
-    is not a URL, is returned unchanged."""
+    """Returns target with any credential userinfo replaced by '***@', including for a target too
+    malformed for urlsplit to parse; a target carrying no credentials is returned unchanged."""
     try:
         parts = urllib.parse.urlsplit(target)
     except ValueError:
+        return _mask_credential_runs(target)
+    if "@" in parts.netloc:
+        host = parts.netloc.rsplit("@", 1)[1]
+        return urllib.parse.urlunsplit(parts._replace(netloc=USERINFO_MASK + host))
+    if parts.netloc:
         return target
-    if "@" not in parts.netloc:
-        return target
-    host = parts.netloc.rsplit("@", 1)[1]
-    return urllib.parse.urlunsplit(parts._replace(netloc="***@" + host))
+    return _mask_credential_runs(target)
 
 
 def mask_secret(raw: str) -> str:
@@ -201,9 +220,7 @@ def run_scan(scan_id: int, cmd: list[str]) -> None:
         if drain is not None:
             with contextlib.suppress(Exception):
                 drain.join(timeout=STDERR_JOIN_TIMEOUT)
-            # A grandchild that inherited the write end keeps the pipe open after the child exits,
-            # so the join stays bounded and the count is reported as a lower bound ("12+") when the
-            # drain is still running rather than as a final figure.
+            # Keep the join bounded: an open inherited write end makes the count a lower bound.
             drained = f"{stderr_lines[0]}+" if drain.is_alive() else str(stderr_lines[0])
         status = "completed" if exit_code == 0 else "failed"
         if exit_code is not None and exit_code != 0:
@@ -232,14 +249,14 @@ def run_scan(scan_id: int, cmd: list[str]) -> None:
 
 def start_scan(scan_id: int, source: str, target: str, binary: str) -> threading.Thread:
     """Starts run_scan for scan_id on a daemon thread and returns that thread without joining it,
-    where binary is the resolved executable, source the subcommand and target its argument. Marks
-    the already-created scan failed with no exit code and re-raises when the thread cannot start."""
+    where binary is the resolved executable, source the subcommand and target its argument. When the
+    thread cannot start it attempts to mark that scan failed with no exit code, then re-raises."""
     cmd = build_command(binary, source, target)
     logger.info(
         "starting scan (scan_id=%s, source=%s): %s",
         scan_id,
         source,
-        " ".join(build_command(binary, source, redact_target(target))),
+        command_log_line(build_command(binary, source, redact_target(target))),
     )
     try:
         thread = threading.Thread(

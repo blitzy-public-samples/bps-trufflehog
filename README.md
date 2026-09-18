@@ -897,10 +897,10 @@ The `backend/` and `frontend/` directories hold a prototype results pipeline bui
 TruffleHog itself is not modified: there is no fork, no vendored copy, and no new or altered CLI flags. The backend invokes the published binary with documented flags only.
 
 ```bash
-trufflehog git file:///path/to/repo --json --no-update
+trufflehog git --json --no-update -- file:///path/to/repo
 ```
 
-Only the first two arguments vary: the first is the source subcommand, either `git` or `filesystem`, and the second is that subcommand's target — a repository URI for `git`, a path for `filesystem`. A local repository must be given to the `git` source with a `file://` prefix, as above. `--json` and `--no-update` are always appended.
+Only two arguments vary: the source subcommand, either `git` or `filesystem`, and that subcommand's target — a repository URI for `git`, a path for `filesystem`. A local repository must be given to the `git` source with a `file://` prefix, as above. `--json` and `--no-update` are always passed, and the target is always last, behind the `--` terminator, so a target that begins with `-` or `@` is scanned as a literal target instead of being read as an option or as a file of arguments.
 
 The backend serves four routes:
 
@@ -958,7 +958,7 @@ The database is created automatically on the backend's first start at `backend/t
 ## Secret hygiene
 
 - The stored finding JSON **excludes** the `Raw`, `RawV2` and `SecretParts` values, so no plaintext credential is persisted. Only the display-safe `Redacted` value is kept, and a mask derived from the raw value is stored in its place when a detector leaves `Redacted` empty. Everything else in the finding object is retained.
-- Credential-bearing targets are stored **redacted**: a target such as `https://user:token@host/org/repo.git` has its userinfo replaced with `***@` before the target is stored, logged or returned by the API. The original string is passed only to the subprocess.
+- Credential-bearing targets are stored **redacted**: a target such as `https://user:token@host/org/repo.git` has its userinfo replaced with `***@` before the target is stored, logged or returned by the API. The original string is passed only to the subprocess. When no authority can be parsed out of the target — a malformed URL such as `https://user:token@[bad/repo.git`, or an scp-style `user:token@host:path` — every `user:password@` sequence in it is masked instead, so no spelling of a broken URL carries a credential into the database, the API response or the log. An scp-style target holding no password, such as `git@github.com:org/repo.git`, is left as submitted. The logged command line is escaped argument by argument, so control characters in a target cannot forge a log record.
 - TruffleHog's own stderr is drained so the scan process never blocks on a full pipe, but its content is never relayed to the backend's logs.
 
 ## Tests

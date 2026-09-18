@@ -1,4 +1,4 @@
-/* metric tiles */
+/* Metric tiles */
 .dash-tiles {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -45,7 +45,7 @@
   background: var(--color-unverified);
 }
 
-/* chart and triage progress row */
+/* Chart and triage progress row */
 .dash-row2 {
   display: grid;
   grid-template-columns: 2fr 1fr;
@@ -59,7 +59,7 @@
   font-weight: var(--weight-semibold);
 }
 
-/* chart */
+/* Chart */
 .dash-chart-area {
   display: flex;
   align-items: flex-end;
@@ -148,7 +148,7 @@
   gap: var(--space-2);
 }
 
-/* triage progress */
+/* Triage progress */
 .dash-progress-value {
   color: var(--color-text);
   font-family: var(--font-mono);
@@ -179,7 +179,7 @@
   font-weight: var(--weight-semibold);
 }
 
-/* exposure */
+/* Exposure */
 .dash-exposure {
   display: flex;
   flex-direction: column;

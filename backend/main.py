@@ -34,8 +34,8 @@ class ScanRequest(BaseModel):
 @app.post("/api/scans", status_code=202)
 def create_scan(req: ScanRequest):
     """Starts a background scan of the requested target and returns the new running scan object.
-    Fails with 503 when no trufflehog executable resolves, before any scan row is written, and with
-    503 when the worker cannot start, after start_scan has marked that row failed."""
+    Fails with 503 when no trufflehog executable resolves, before any scan row is written, and when
+    the worker cannot start, in which case start_scan has attempted to mark that row failed."""
     try:
         binary = scanner.resolve_binary()
     except scanner.TrufflehogNotFoundError as exc:

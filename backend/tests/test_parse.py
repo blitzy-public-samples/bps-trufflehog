@@ -1,20 +1,76 @@
-"""Unit tests for the pure output-parsing helpers in scanner."""
+"""Unit tests for scanner parsing, mapping, command, masking, and redaction helpers."""
 
 import json
 import logging
+import urllib.parse
+
+import pytest
 
 import scanner
 
-# Joined at runtime so this file's own text matches no GitHub token pattern.
+# Split across source tokens so this file's text matches no GitHub token pattern.
 RAW = "ghp_" + "x" * 36
 
-# Expected masks written out rather than computed, so mask_secret is never its own oracle.
+# Expected masks are defined independently, so mask_secret is never its own oracle.
 MASKED_RAW = "ghp_\u2026xxxx"
 SHORT_RAW = "a" * 12
 MASKED_SHORT_RAW = "*" * 12
 
 COMMIT = "1caf0105" + "9f3c" * 8
 REPOSITORY = "file:///tmp/fixture"
+
+TARGET_SECRET = "n0t-a-real-token"
+
+CREDENTIAL_TARGETS = (
+    (f"https://user:{TARGET_SECRET}@host/org/repo.git", "https://***@host/org/repo.git"),
+    (f"ssh://user:{TARGET_SECRET}@[::1]:22/org/repo.git", "ssh://***@[::1]:22/org/repo.git"),
+)
+
+UNPARSEABLE_CREDENTIAL_TARGETS = (
+    (f"https://user:{TARGET_SECRET}@[bad/repo.git", "https://***@[bad/repo.git"),
+    (f"https://user:{TARGET_SECRET}@[::1/repo.git", "https://***@[::1/repo.git"),
+    (f"https://user%3A{TARGET_SECRET}@[bad/repo.git", "https://***@[bad/repo.git"),
+    (f"https://user:{TARGET_SECRET}@x@[bad/repo.git", "https://***@[bad/repo.git"),
+)
+
+AUTHORITYLESS_CREDENTIAL_TARGETS = (
+    (f"user:{TARGET_SECRET}@host:org/repo.git", "***@host:org/repo.git"),
+    (f"user:{TARGET_SECRET}@host:org//repo.git", "***@host:org//repo.git"),
+    (f"https:///user:{TARGET_SECRET}@[bad/repo.git", "https:///***@[bad/repo.git"),
+    (f"https:/user:{TARGET_SECRET}@[bad/repo.git", "https:/***@[bad/repo.git"),
+    (f"https:user:{TARGET_SECRET}@host/repo.git", "***@host/repo.git"),
+)
+
+HOSTILE_CREDENTIAL_SPELLINGS = (
+    f"https://user:{TARGET_SECRET}@host/org/repo.git",
+    f"ssh://user:{TARGET_SECRET}@[::1]:22/repo.git",
+    f"git+ssh://user:{TARGET_SECRET}@host/repo.git",
+    f"//user:{TARGET_SECRET}@host/repo.git",
+    f"////user:{TARGET_SECRET}@host/repo.git",
+    f"HTTPS://user:{TARGET_SECRET}@[bad/repo.git",
+    f"  https://user:{TARGET_SECRET}@[bad/repo.git",
+    f"user:{TARGET_SECRET}@[bad",
+    f"file:///tmp/x\nuser:{TARGET_SECRET}@host",
+)
+
+CREDENTIAL_FREE_TARGETS = (
+    "https://host/org/repo.git",
+    "file:///tmp/r",
+    "/srv/code",
+    "/srv/code@main/repo",
+    "git@github.com:org/repo.git",
+)
+
+FLAG_SHAPED_TARGETS = (
+    "--profile",
+    "--config=/tmp/injected.yaml",
+    "--no-verification",
+    "--fail",
+    "--json-legacy",
+    "@/tmp/injected-args",
+)
+
+LOG_HOSTILE_TARGET = "file:///tmp/r\nWARNING forged record\rreturn\x1b[31m\u2028\u2029\u0085"
 
 GIT_METADATA = {
     "Data": {
@@ -80,9 +136,8 @@ def finding_line(**overrides) -> str:
 
 
 def test_valid_finding_line():
-    """A printer-shaped line parses into an object whose mapping fills every findings column, and
-    the masked display value keeps the plaintext secret out of both that column and the stored
-    JSON."""
+    """A printer-shaped line maps every stored finding field while keeping the plaintext secret out
+    of the display value and raw_json."""
     obj = scanner.parse_line(finding_line())
     assert isinstance(obj, dict)
 
@@ -140,7 +195,7 @@ def test_non_object_json():
 
 
 def test_filesystem_metadata():
-    """A Filesystem finding maps file and line while repository and commit stay unset."""
+    """A Filesystem finding maps file and line while repository and commit_hash stay unset."""
     mapped = scanner.finding_from_json(
         scanner.parse_line(finding_line(metadata=FILESYSTEM_METADATA))
     )
@@ -162,22 +217,84 @@ def test_redacted_preferred_over_mask():
 
 
 def test_build_command():
-    """The scan command is the binary, subcommand and target followed by --json and --no-update."""
+    """The scan command is the binary and subcommand, then --json and --no-update, then the --
+    terminator with the target last."""
     cmd = scanner.build_command("/usr/bin/trufflehog", "git", "file:///r")
 
-    assert cmd == ["/usr/bin/trufflehog", "git", "file:///r", "--json", "--no-update"]
+    assert cmd == ["/usr/bin/trufflehog", "git", "--json", "--no-update", "--", "file:///r"]
     assert "--fail" not in cmd, "--fail would return exit code 183 and break the status mapping"
     assert "--no-verification" not in cmd, "verification drives the Verified badge and stays on"
 
 
+def test_build_command_keeps_flag_shaped_targets_positional():
+    """A target shaped like an option or an @argument file stays the last argument behind the --
+    terminator, so the scanner's parser cannot read it as CLI syntax."""
+    for target in FLAG_SHAPED_TARGETS:
+        cmd = scanner.build_command("/usr/bin/trufflehog", "filesystem", target)
+
+        assert cmd[:4] == ["/usr/bin/trufflehog", "filesystem", "--json", "--no-update"], cmd
+        assert cmd[-2:] == ["--", target], f"{target!r} must follow the -- terminator, got {cmd}"
+        assert len(cmd) == 6, f"{target!r} must add exactly one argument, got {cmd}"
+
+
 def test_redact_target():
     """URL userinfo is replaced by '***@'; targets carrying no credentials pass through unchanged."""
-    cases = (
-        ("https://user:tok@host/org/repo.git", "https://***@host/org/repo.git"),
-        ("https://host/org/repo.git", "https://host/org/repo.git"),
-        ("file:///tmp/r", "file:///tmp/r"),
-        ("/srv/code", "/srv/code"),
+    for target, expected in CREDENTIAL_TARGETS:
+        assert scanner.redact_target(target) == expected, f"{target!r} must redact to {expected!r}"
+
+    for target in CREDENTIAL_FREE_TARGETS:
+        assert scanner.redact_target(target) == target, f"{target!r} must pass through unchanged"
+
+
+def test_redact_target_on_an_unparseable_authority():
+    """A credential-bearing URL urlsplit rejects is redacted instead of returned intact."""
+    for target, expected in UNPARSEABLE_CREDENTIAL_TARGETS:
+        with pytest.raises(ValueError):
+            urllib.parse.urlsplit(target)
+
+        redacted = scanner.redact_target(target)
+        assert redacted == expected, f"{target!r} must redact to {expected!r}, got {redacted!r}"
+        assert TARGET_SECRET not in redacted, "an unparseable URL carried its credential through"
+
+
+def test_redact_target_without_a_parsed_authority():
+    """A target urlsplit parses without a netloc — scp-style, or a URL whose separators are
+    malformed — is redacted on the credential run itself rather than on a located authority."""
+    for target, expected in AUTHORITYLESS_CREDENTIAL_TARGETS:
+        assert urllib.parse.urlsplit(target).netloc == "", f"{target!r} needs an empty netloc"
+
+        redacted = scanner.redact_target(target)
+        assert redacted == expected, f"{target!r} must redact to {expected!r}, got {redacted!r}"
+        assert TARGET_SECRET not in redacted, f"{target!r} carried its credential through"
+
+
+def test_redact_target_never_returns_a_credential():
+    """No spelling of a credential-bearing target keeps its password: every hostile form loses the
+    secret and gains the mask, whichever branch of redact_target handles it."""
+    spellings = (
+        HOSTILE_CREDENTIAL_SPELLINGS
+        + tuple(target for target, _ in CREDENTIAL_TARGETS)
+        + tuple(target for target, _ in UNPARSEABLE_CREDENTIAL_TARGETS)
+        + tuple(target for target, _ in AUTHORITYLESS_CREDENTIAL_TARGETS)
     )
 
-    for target, expected in cases:
-        assert scanner.redact_target(target) == expected, f"{target!r} must redact to {expected!r}"
+    for target in spellings:
+        redacted = scanner.redact_target(target)
+        assert TARGET_SECRET not in redacted, f"{target!r} leaked its credential as {redacted!r}"
+        assert "***@" in redacted, f"{target!r} was not masked: {redacted!r}"
+
+
+def test_command_log_line_escapes_control_characters():
+    """A target carrying newline, carriage-return, escape or Unicode separator characters reaches the
+    logged command line escaped, so it cannot forge or reshape a record."""
+    line = scanner.command_log_line(
+        scanner.build_command("/usr/bin/trufflehog", "git", LOG_HOSTILE_TARGET)
+    )
+
+    for character in ("\n", "\r", "\x1b", "\u2028", "\u2029", "\u0085"):
+        assert character not in line, f"{character!r} must not survive into a log line"
+
+    for escaped in ("\\n", "\\r", "\\x1b", "\\u2028", "\\u2029", "\\x85"):
+        assert escaped in line, f"{escaped} must stand in for the raw character: {line}"
+
+    assert "'--'" in line, "the logged command line keeps the -- terminator visible"

@@ -52,7 +52,7 @@ function matchesSelections(finding, statusFilter, typeFilter) {
   return true;
 }
 
-/** Renders one findings row: status badge, secret type, repo, location, detection date, assignee and triage actions. */
+/** Renders one finding row: status, secret type, repo, location, date, assignee and triage actions. */
 function TriageRow({ finding, scansById, entry, onTriage, onSelectFinding }) {
   const verified = finding.verified === true;
   const triageLabel = TRIAGE_LABELS[entry?.state];
@@ -123,7 +123,7 @@ function TriageRow({ finding, scansById, entry, onTriage, onSelectFinding }) {
   );
 }
 
-/** Engineering Triage screen: filters {findings} with {scansById} and {triage}, reporting actions through {onTriage} and row selection through {onSelectFinding}. */
+/** Engineering Triage screen: filters {findings} with {scansById}, displays {triage} and reports actions through {onTriage} and row selection through {onSelectFinding}. */
 export function EngineeringTriage({ findings, scansById, triage, onTriage, onSelectFinding }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
