@@ -32,7 +32,7 @@
 }
 
 .board-table-card .board-repo {
-  max-width: var(--layout-sidebar);
+  max-width: var(--table-cell-max);
   overflow: hidden;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -43,7 +43,7 @@
 }
 
 .board-table-card .board-owner {
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   text-align: left;
   white-space: nowrap;
 }

@@ -226,6 +226,7 @@ def test_build_command():
     assert "--no-verification" not in cmd, "verification drives the Verified badge and stays on"
 
 
+@pytest.mark.regression
 def test_build_command_keeps_flag_shaped_targets_positional():
     """A target shaped like an option or an @argument file stays the last argument behind the --
     terminator, so the scanner's parser cannot read it as CLI syntax."""
@@ -246,6 +247,7 @@ def test_redact_target():
         assert scanner.redact_target(target) == target, f"{target!r} must pass through unchanged"
 
 
+@pytest.mark.regression
 def test_redact_target_on_an_unparseable_authority():
     """A credential-bearing URL urlsplit rejects is redacted instead of returned intact."""
     for target, expected in UNPARSEABLE_CREDENTIAL_TARGETS:
@@ -257,6 +259,7 @@ def test_redact_target_on_an_unparseable_authority():
         assert TARGET_SECRET not in redacted, "an unparseable URL carried its credential through"
 
 
+@pytest.mark.regression
 def test_redact_target_without_a_parsed_authority():
     """A target urlsplit parses without a netloc — scp-style, or a URL whose separators are
     malformed — is redacted on the credential run itself rather than on a located authority."""
@@ -268,6 +271,7 @@ def test_redact_target_without_a_parsed_authority():
         assert TARGET_SECRET not in redacted, f"{target!r} carried its credential through"
 
 
+@pytest.mark.regression
 def test_redact_target_never_returns_a_credential():
     """No spelling of a credential-bearing target keeps its password: every hostile form loses the
     secret and gains the mask, whichever branch of redact_target handles it."""
@@ -284,6 +288,7 @@ def test_redact_target_never_returns_a_credential():
         assert "***@" in redacted, f"{target!r} was not masked: {redacted!r}"
 
 
+@pytest.mark.regression
 def test_command_log_line_escapes_control_characters():
     """A target carrying newline, carriage-return, escape or Unicode separator characters reaches the
     logged command line escaped, so it cannot forge or reshape a record."""

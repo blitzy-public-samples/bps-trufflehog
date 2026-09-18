@@ -62,7 +62,7 @@
 .triage-note {
   margin-left: var(--space-1);
   font-size: var(--text-xs);
-  color: var(--color-text-dim);
+  color: var(--color-text-muted);
   white-space: nowrap;
 }
 
@@ -83,7 +83,7 @@
 }
 
 .triage-table-card .triage-repo {
-  max-width: var(--layout-sidebar);
+  max-width: var(--table-cell-max);
   overflow: hidden;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -139,7 +139,7 @@
 
 .triage-redacted {
   display: block;
-  max-width: var(--layout-sidebar);
+  max-width: var(--table-cell-max);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

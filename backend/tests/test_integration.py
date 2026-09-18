@@ -255,6 +255,7 @@ def test_run_scan_skips_unparseable_lines(db_path, caplog):
     assert any("exited with code 3" in m for m in _messages(caplog, logging.WARNING))
 
 
+@pytest.mark.regression
 def test_run_scan_commits_findings_while_running(db_path, tmp_path):
     """Runs a two-finding child and checks partial results are visible while the scan is running
     and both findings are stored at completion."""
@@ -344,6 +345,7 @@ def _lingering_worker_script() -> str:
     }
 
 
+@pytest.mark.regression
 def test_run_scan_finalizes_and_guards_the_terminal_update(db_path):
     """Checks the worker's single finalization path: a finding insert that fails still records a
     terminal status, and a terminal update that fails once is retried."""
@@ -388,6 +390,7 @@ def test_run_scan_finalizes_and_guards_the_terminal_update(db_path):
     assert retried["exit_code"] == 0
 
 
+@pytest.mark.regression
 def test_start_scan_marks_the_scan_failed_when_the_worker_thread_cannot_start(client, monkeypatch):
     """Starts a scan whose worker thread refuses to start and expects a controlled 503 plus a scan
     row marked failed with no exit code rather than one stuck in 'running'."""
@@ -423,6 +426,7 @@ def test_start_scan_marks_the_scan_failed_when_the_worker_thread_cannot_start(cl
     assert created[0]["exit_code"] is None
 
 
+@pytest.mark.regression
 def test_completion_record_reports_an_unfinished_stderr_drain(db_path, caplog):
     """Runs a worker that leaves a grandchild holding the stderr pipe and checks that finalization
     is neither blocked nor stalled and that the completion record qualifies the drained count."""
@@ -451,6 +455,7 @@ def test_completion_record_reports_an_unfinished_stderr_drain(db_path, caplog):
 DRAIN_START_FAILURE = "refusing to start the stderr drain"
 
 
+@pytest.mark.regression
 def test_run_scan_finalizes_when_the_stderr_drain_cannot_start(db_path, caplog):
     """Refuses to start the stderr drain and checks that the worker still records a terminal status
     and propagates the original failure rather than an error from joining an unstarted thread."""
@@ -505,6 +510,7 @@ def _settled_scan(client, scan_id: int) -> dict:
     return row
 
 
+@pytest.mark.regression
 @pytest.mark.parametrize(("target", "redacted"), MALFORMED_CREDENTIAL_TARGETS)
 def test_a_malformed_credential_target_is_redacted_in_every_sink(
     client, monkeypatch, caplog, target, redacted
@@ -548,6 +554,7 @@ RAW_CONTROL_CHARACTERS = ("\n", "\r", "\x1b", "\u2028", "\u2029")
 ESCAPED_CONTROL_SEQUENCES = ("\\n", "\\r", "\\x1b", "\\u2028", "\\u2029")
 
 
+@pytest.mark.regression
 def test_the_start_record_escapes_control_characters_in_a_target(db_path, caplog):
     """Starts a worker on a target carrying newline, carriage-return, escape and Unicode separator
     characters and checks the INFO start record escapes them onto its own single line."""

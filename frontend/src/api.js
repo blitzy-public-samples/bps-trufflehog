@@ -67,7 +67,7 @@ export async function listScans() {
 
 /** GETs /api/scans/{scanId}/findings and returns that scan's finding objects, newest id first. */
 export async function getScanFindings(scanId) {
-  return request(`/api/scans/${scanId}/findings`);
+  return request(`/api/scans/${encodeURIComponent(scanId)}/findings`);
 }
 
 /** GETs /api/findings and returns every finding object across all scans, newest id first. */

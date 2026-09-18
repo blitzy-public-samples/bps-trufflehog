@@ -19,6 +19,15 @@ GIT_LOCAL_CONFIG = (
 )
 
 
+def pytest_configure(config):
+    """Registers the regression marker, which labels a test that pins an earlier fix rather than one
+    of the suite's own named cases; config is the pytest config being initialised."""
+    config.addinivalue_line(
+        "markers",
+        "regression: pins an earlier fix; deselect with -m 'not regression'",
+    )
+
+
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     """Runs one git command inside repo with output captured; raises CalledProcessError on a non-zero
     exit and returns the completed process."""

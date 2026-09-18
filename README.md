@@ -971,6 +971,24 @@ cd backend && python -m pytest tests -v --tb=short
 
 Tests that need the `trufflehog` binary or `git` skip themselves when those are absent. The frontend has no automated tests; it is checked by manual review.
 
+## Accepted deviations from the original design
+
+Four exact shapes fixed by the design this prototype was written from are not the shapes the code delivers. Each difference was examined in review and accepted as it stands rather than reverted, because reverting it would remove a security control or drop test coverage. They are recorded here so that the counts read as deliberate rather than as drift.
+
+- **The scan command puts both flags before a `--` terminator and the target last** — six arguments, as shown at the top of this section, rather than the target immediately after the subcommand. The terminator is what keeps a target beginning with `-` or `@` a target, instead of letting it be read as an option or as a file of arguments.
+- **`backend/scanner.py` defines twelve top-level names rather than ten.** The two beyond the original list, `command_log_line` and `_mask_credential_runs`, implement the hygiene guarantees above: escaping the logged command line argument by argument, and masking a target whose authority cannot be parsed at all. Folding them into their callers would inline both controls and remove the escaping helper's own unit test.
+- **`frontend/src/format.js` exports twelve helpers rather than nine.** `detectorLabel`, `fileLabel` and `redactedLabel` were duplicated verbatim in two screens; that module is where a helper used by more than one screen belongs, so removing the duplication raised the count.
+- **The suite collects twenty-seven tests rather than thirteen.** All thirteen originally named tests are present, and they are exactly the set that remains once the later tests are deselected. The other fourteen were added afterwards, each pinning one fix: worker finalization and its terminal update, the compensation applied when a worker thread cannot start, the two stderr-drain outcomes, finding visibility while a scan is still running, a flag-shaped target kept positional, credential redaction for every malformed spelling of a target and in every sink it reaches, and the escaping of control characters in the logged command line.
+
+Every test runs by default. The fourteen later tests carry a `regression` marker, so either inventory can be listed on its own: the first two commands below print `12`, and the last two report 13 and 14 collected tests.
+
+```bash
+grep -cE '^(def|class) ' backend/scanner.py
+grep -c '^export function ' frontend/src/format.js
+(cd backend && python -m pytest tests --collect-only -q -m "not regression")
+(cd backend && python -m pytest tests --collect-only -q -m regression)
+```
+
 # Use as a library
 
 Currently, trufflehog is in heavy development and no guarantees can be made on

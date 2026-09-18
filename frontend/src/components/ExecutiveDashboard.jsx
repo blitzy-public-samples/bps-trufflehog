@@ -66,7 +66,7 @@ function MetricTile({ label, value, dotClass }) {
 }
 
 /** Executive Summary screen: detection totals, the eight-week trend, triage progress and repo exposure from {scans, findings, scansById, triage, onNavigate}. */
-export default function ExecutiveDashboard({ scans, findings, scansById, triage, onNavigate }) {
+export function ExecutiveDashboard({ scans, findings, scansById, triage, onNavigate }) {
   const scanRows = Array.isArray(scans) ? scans : [];
   const findingRows = Array.isArray(findings) ? findings : [];
   const triageMap = triage ?? {};
@@ -158,3 +158,5 @@ export default function ExecutiveDashboard({ scans, findings, scansById, triage,
     </>
   );
 }
+
+export default ExecutiveDashboard;
