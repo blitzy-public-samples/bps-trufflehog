@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import db
+import main
 import scanner
 from conftest import PLANTED_TOKEN
 
@@ -396,8 +397,6 @@ def test_start_scan_marks_the_scan_failed_when_the_worker_thread_cannot_start(cl
     row marked failed with no exit code rather than one stuck in 'running'."""
     import types
 
-    import main
-
     constructed = []
 
     class RefusingThread:
@@ -643,6 +642,93 @@ def test_request_validation_precedes_binary_resolution(client, monkeypatch):
     assert _scan_ids(client) == before, "a rejected request must not create a scan row"
 
 
+JSON_HEADERS = {"content-type": "application/json"}
+# json.dumps escapes each surrogate, so every request body below is plain ASCII on the wire; the
+# server's parser rebuilds the character, which UTF-8 then cannot encode.
+HIGH_SURROGATE = "\ud800"
+LOW_SURROGATE = "\udfff"
+HIGH_SURROGATE_ESCAPE = r"\ud800"
+LOW_SURROGATE_ESCAPE = r"\udfff"
+SURROGATE_BODIES = (
+    (json.dumps({"target": f"file:///tmp/{HIGH_SURROGATE}bad"}), "target", HIGH_SURROGATE_ESCAPE),
+    (
+        json.dumps({"target": "file:///tmp/ok", "source": f"g{HIGH_SURROGATE}it"}),
+        "source",
+        HIGH_SURROGATE_ESCAPE,
+    ),
+    (json.dumps({"target": {"a": HIGH_SURROGATE}}), "target", HIGH_SURROGATE_ESCAPE),
+    (json.dumps(HIGH_SURROGATE), "body", HIGH_SURROGATE_ESCAPE),
+    (json.dumps({"target": f"file:///tmp/{LOW_SURROGATE}bad"}), "target", LOW_SURROGATE_ESCAPE),
+)
+# A surrogate the request model never reads: an unknown field, and a key rather than a value.
+ACCEPTED_SURROGATE_BODIES = (
+    json.dumps({"target": "file:///tmp/surrogate-extra", "note": HIGH_SURROGATE}),
+    json.dumps({"target": "file:///tmp/surrogate-key", HIGH_SURROGATE: "x"}),
+)
+
+
+def _has_surrogate(text: str) -> bool:
+    """Reports whether text carries a UTF-16 surrogate code point, which UTF-8 cannot encode."""
+    return any("\ud800" <= character <= "\udfff" for character in text)
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize(("body", "field", "escape"), SURROGATE_BODIES)
+def test_a_lone_surrogate_in_the_body_is_rejected_without_a_server_error(
+    client, body, field, escape
+):
+    """Posts a body carrying a lone UTF-16 surrogate and checks the request is rejected with the
+    documented 422 JSON detail naming the offending field, its input escaped rather than passed
+    through, and no scan row created."""
+    before = _scan_ids(client)
+
+    response = client.post("/api/scans", content=body.encode("ascii"), headers=JSON_HEADERS)
+
+    assert response.status_code == VALIDATION_STATUS, response.text
+    assert response.headers["content-type"].startswith("application/json"), response.headers
+    offending = _errors_for(response, field)
+    assert len(offending) == 1, _validation_errors(response)
+    echoed = json.dumps(offending[0].get("input"))
+    assert escape in echoed, echoed
+    assert not _has_surrogate(response.text), "the rejection echoed an unencodable code point"
+    assert _scan_ids(client) == before, "a rejected request must not create a scan row"
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize("body", ACCEPTED_SURROGATE_BODIES)
+def test_a_surrogate_outside_the_request_fields_still_starts_a_scan(client, monkeypatch, body):
+    """Posts a valid target beside a surrogate the request model never reads and checks the scan is
+    still accepted, so the rejection path cannot swallow a usable request."""
+    monkeypatch.setenv("TRUFFLEHOG_BIN", sys.executable)
+
+    response = client.post("/api/scans", content=body.encode("ascii"), headers=JSON_HEADERS)
+
+    assert response.status_code == 202, response.text
+    accepted = response.json()
+    assert accepted["status"] == "running", accepted
+    # Settled before the test ends so this scan's worker cannot outlive the database it writes to.
+    assert _settled_scan(client, accepted["id"])["status"] == "failed"
+
+
+@pytest.mark.regression
+def test_json_safe_renders_the_shapes_a_rejection_detail_can_carry():
+    """Checks the rejection body builder escapes unencodable text, stringifies keys, flattens the
+    sequences pydantic reports and carries an arbitrary object as its text."""
+    rendered = main.json_safe(
+        {
+            ("body", "target"): ValueError(f"bad {HIGH_SURROGATE}"),
+            1: {"ints": (1, 2), "set": {3}, "flags": [True, None, 1.5]},
+            "text": f"file:///tmp/{HIGH_SURROGATE}",
+        }
+    )
+
+    assert rendered["text"] == f"file:///tmp/{HIGH_SURROGATE_ESCAPE}"
+    assert HIGH_SURROGATE_ESCAPE in rendered["('body', 'target')"]
+    assert rendered["1"] == {"ints": [1, 2], "set": [3], "flags": [True, None, 1.5]}
+    assert not _has_surrogate(json.dumps(rendered))
+    assert json.dumps(rendered).encode("utf-8"), "the rendered detail must encode as UTF-8"
+
+
 UNSPAWNABLE_BINARY_PATH = "/nonexistent/binary/path"
 SPAWN_FAILURE_MESSAGE = "could not start the scan subprocess"
 
@@ -755,19 +841,29 @@ def test_init_db_sweeps_scans_left_running(db_path, caplog):
     assert ORPHAN_SWEEP_SUBJECT not in caplog.text, caplog.text
 
 
-LONG_TARGET_LENGTH = 65536
-LONG_TARGET_FILLER = "a" * LONG_TARGET_LENGTH
 # Split across source tokens like conftest's planted token, so no line here reads as a credential.
 LONG_TARGET_CREDENTIAL = "n0t-a-real" + "-long-target-token"
-# Both shapes carry no authority for urlsplit to find, which is the redaction path that used to
-# grow with the square of the target length. Expected values are independent literals.
+LONG_TARGET_PREFIX = "file:///tmp/qa-"
+LONG_PATH_PREFIX = "/srv/"
+LONG_PATH_SUFFIX = f"/user:{LONG_TARGET_CREDENTIAL}@host/repo"
+LONG_PATH_REDACTED_SUFFIX = "/***@host/repo"
+# Both shapes carry no authority for urlsplit to find, which is the redaction path that used to grow
+# with the square of the target length, and both sit on the longest target the request model accepts.
+LONG_TARGET_FILLER = "a" * (main.TARGET_MAX_LENGTH - len(LONG_TARGET_PREFIX))
+LONG_PATH_FILLER = "a" * (main.TARGET_MAX_LENGTH - len(LONG_PATH_PREFIX) - len(LONG_PATH_SUFFIX))
 LONG_TARGETS = (
-    (f"file:///tmp/qa-{LONG_TARGET_FILLER}", f"file:///tmp/qa-{LONG_TARGET_FILLER}"),
+    (f"{LONG_TARGET_PREFIX}{LONG_TARGET_FILLER}", f"{LONG_TARGET_PREFIX}{LONG_TARGET_FILLER}"),
     (
-        f"/srv/{LONG_TARGET_FILLER}/user:{LONG_TARGET_CREDENTIAL}@host/repo",
-        f"/srv/{LONG_TARGET_FILLER}/***@host/repo",
+        f"{LONG_PATH_PREFIX}{LONG_PATH_FILLER}{LONG_PATH_SUFFIX}",
+        f"{LONG_PATH_PREFIX}{LONG_PATH_FILLER}{LONG_PATH_REDACTED_SUFFIX}",
     ),
 )
+
+# The length the report's amplification payload used, beside the first length the model refuses.
+AMPLIFYING_TARGET_LENGTH = 5_000_000
+OVERSIZE_TARGET_LENGTHS = (main.TARGET_MAX_LENGTH + 1, AMPLIFYING_TARGET_LENGTH)
+TOO_LONG_ERROR_TYPE = "string_too_long"
+ERROR_TEXT_LIMIT = 200
 
 SINGLE_REDACTION_TARGET = f"https://user:{MALFORMED_TARGET_CREDENTIAL}@host/org/repo.git"
 SINGLE_REDACTION_EXPECTED = "https://***@host/org/repo.git"
@@ -785,9 +881,10 @@ UNUSED_SCAN_IDS = (2**63 - 1, -(2**63), 0, -1, 999999)
 @pytest.mark.regression
 @pytest.mark.parametrize(("target", "redacted"), LONG_TARGETS)
 def test_a_long_target_is_accepted_within_the_start_budget(client, monkeypatch, target, redacted):
-    """Posts a 64 KB target of each authority-less shape and checks the scan id comes back inside the
-    start budget with any credential already masked."""
+    """Posts the longest accepted target in each authority-less shape and checks the scan id comes
+    back inside the start budget with any credential already masked."""
     monkeypatch.setenv("TRUFFLEHOG_BIN", sys.executable)
+    assert len(target) == main.TARGET_MAX_LENGTH, len(target)
 
     started = time.perf_counter()
     response = client.post("/api/scans", json={"target": target})
@@ -804,6 +901,30 @@ def test_a_long_target_is_accepted_within_the_start_budget(client, monkeypatch, 
     assert _served_scan(client, accepted["id"])["target"] == redacted
     # Settled before the test ends so this scan's worker cannot outlive the database it writes to.
     assert _settled_scan(client, accepted["id"])["target"] == redacted
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize("length", OVERSIZE_TARGET_LENGTHS)
+def test_an_oversize_target_is_rejected_and_never_stored(client, monkeypatch, length):
+    """Posts a target longer than the request model accepts and checks it is rejected with a 422
+    naming the bound, that no scan row is created, and that no served row carries a target past the
+    bound, so one request cannot inflate every later scans response."""
+    monkeypatch.setenv("TRUFFLEHOG_BIN", sys.executable)
+    before = _scan_ids(client)
+
+    response = client.post("/api/scans", json={"target": "g" * length})
+
+    assert response.status_code == VALIDATION_STATUS, response.text[:ERROR_TEXT_LIMIT]
+    offending = _errors_for(response, "target")
+    assert len(offending) == 1, len(_validation_errors(response))
+    assert offending[0]["type"] == TOO_LONG_ERROR_TYPE, offending[0]["type"]
+    assert offending[0]["ctx"]["max_length"] == main.TARGET_MAX_LENGTH, offending[0]["ctx"]
+    assert _scan_ids(client) == before, "a rejected request must not create a scan row"
+
+    served = client.get("/api/scans")
+    assert served.status_code == 200, served.text[:ERROR_TEXT_LIMIT]
+    longest = max((len(row["target"]) for row in served.json()), default=0)
+    assert longest <= main.TARGET_MAX_LENGTH, f"a stored target reached {longest} characters"
 
 
 @pytest.mark.regression

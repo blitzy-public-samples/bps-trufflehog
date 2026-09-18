@@ -9,8 +9,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# Keep the two halves separate: joined into one literal, this file itself would match the detector.
-PLANTED_TOKEN = "ghp_Ih6X3x7CMamOw5bQFsYO" + "PSzn1nitshTLhhFT"
+# Join the halves only at runtime; a literal `+` folds at compile time into the bytecode cache.
+_TOKEN_HEAD = "ghp_Ih6X3x7CMamOw5bQFsYO"
+_TOKEN_TAIL = "PSzn1nitshTLhhFT"
+PLANTED_TOKEN = "".join((_TOKEN_HEAD, _TOKEN_TAIL))
 
 GIT_LOCAL_CONFIG = (
     ("user.name", "Results Pipeline Test"),

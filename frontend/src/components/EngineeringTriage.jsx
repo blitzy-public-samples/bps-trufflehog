@@ -193,11 +193,17 @@ function TriageRowContent({ finding, scansById, entry, onTriage, onSelectFinding
           aria-label={`Open finding ${rowLabel}`}
           onClick={openFinding}
         >
-          <span className="triage-primary">{detectorLabel(finding)}</span>
-          <span className="triage-redacted">{redactedLabel(finding)}</span>
+          <span className="triage-primary">
+            <bdi>{detectorLabel(finding)}</bdi>
+          </span>
+          <span className="triage-redacted">
+            <bdi>{redactedLabel(finding)}</bdi>
+          </span>
         </button>
       </td>
-      <td className="triage-repo">{shortRepo(repoKey(finding, scansById))}</td>
+      <td className="triage-repo">
+        <bdi>{shortRepo(repoKey(finding, scansById))}</bdi>
+      </td>
       <td>
         <button
           type="button"
@@ -209,10 +215,17 @@ function TriageRowContent({ finding, scansById, entry, onTriage, onSelectFinding
             className="triage-primary triage-file"
             title={file === PLACEHOLDER ? undefined : file}
           >
-            {file}
+            <bdi>{file}</bdi>
           </span>
           <span className="triage-secondary">
-            {commit === PLACEHOLDER ? PLACEHOLDER : `commit ${commit}`}
+            {commit === PLACEHOLDER ? (
+              PLACEHOLDER
+            ) : (
+              <>
+                {"commit "}
+                <bdi>{commit}</bdi>
+              </>
+            )}
           </span>
         </button>
       </td>

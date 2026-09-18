@@ -34,15 +34,17 @@ function countSiblings(siblings, finding, scansById) {
   ).length;
 }
 
-/** Returns the footer sentence for the loading, failed and loaded sibling states. */
+/** Returns the footer sentence as {lead, repo, tail} for the loading, failed and loaded sibling
+ * states, keeping the repository out of the sentence text so it renders in its own element. */
 function siblingSentence(siblings, siblingsFailed, finding, scansById, repo) {
   if (siblingsFailed) {
-    return SIBLINGS_UNAVAILABLE;
+    return { lead: SIBLINGS_UNAVAILABLE, repo: null, tail: "" };
   }
   if (siblings === null) {
-    return `Counting other findings in ${repo}…`;
+    return { lead: "Counting other findings in ", repo, tail: "…" };
   }
-  return `${formatCount(countSiblings(siblings, finding, scansById))} other finding(s) in ${repo}.`;
+  const count = formatCount(countSiblings(siblings, finding, scansById));
+  return { lead: `${count} other finding(s) in `, repo, tail: "." };
 }
 
 /** Renders one uppercase-labelled value of the meta grid, with the full value as its tooltip. */
@@ -51,7 +53,7 @@ function MetaField({ label, value }) {
     <div>
       <span className="detail-meta-label">{label}</span>
       <p className="detail-meta-value" title={value === PLACEHOLDER ? undefined : value}>
-        {value}
+        <bdi>{value}</bdi>
       </p>
     </div>
   );
@@ -106,7 +108,7 @@ export function FindingDetail({ finding, scansById, triage, onTriage, onBack }) 
   const triageState = triage?.[finding.id]?.state;
   const triageLabel = TRIAGE_LABELS[triageState];
   const repo = shortRepo(repoKey(finding, scansById));
-  const footerCount = siblingSentence(siblings, siblingsFailed, finding, scansById, repo);
+  const footer = siblingSentence(siblings, siblingsFailed, finding, scansById, repo);
 
   return (
     <>
@@ -118,9 +120,11 @@ export function FindingDetail({ finding, scansById, triage, onTriage, onBack }) 
         <div className="detail-head">
           <div>
             <h2 className="detail-title" id={TITLE_ID}>
-              {detectorLabel(finding)}
+              <bdi>{detectorLabel(finding)}</bdi>
             </h2>
-            <p className="detail-subtitle">{repo}</p>
+            <p className="detail-subtitle">
+              <bdi>{repo}</bdi>
+            </p>
           </div>
           <div className="detail-status">
             {triageLabel === undefined ? null : (
@@ -143,11 +147,15 @@ export function FindingDetail({ finding, scansById, triage, onTriage, onBack }) 
 
         <span className="detail-meta-label">SNIPPET</span>
         <pre className="detail-snippet">
-          <code>{redactedLabel(finding)}</code>
+          <code>
+            <bdi>{redactedLabel(finding)}</bdi>
+          </code>
         </pre>
 
         <span className="detail-meta-label">REMEDIATION</span>
-        <p className="detail-remediation">{remediationText(finding)}</p>
+        <p className="detail-remediation">
+          <bdi>{remediationText(finding)}</bdi>
+        </p>
 
         <div className="detail-actions">
           <div className="detail-actions-group">
@@ -188,7 +196,9 @@ export function FindingDetail({ finding, scansById, triage, onTriage, onBack }) 
       </section>
 
       <p className="detail-footer">
-        {footerCount}
+        {footer.lead}
+        {footer.repo === null ? null : <bdi>{footer.repo}</bdi>}
+        {footer.tail}
         <span className="detail-footer-note">{SESSION_NOTE}</span>
       </p>
     </>

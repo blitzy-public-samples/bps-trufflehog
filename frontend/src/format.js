@@ -26,6 +26,19 @@ const RISK_HIGH_MIN = 20;
 const RISK_MEDIUM_MIN = 8;
 const GIT_SUFFIX = ".git";
 const COUNT_FORMAT = new Intl.NumberFormat();
+const DISPLAY_MARKER = "\uFFFD";
+
+/* Bidi marks, embeddings, overrides and isolates, plus the invisible controls and separators that
+   can hide or relocate displayed text. ZWNJ, ZWJ and variation selectors are deliberately absent:
+   scripts that need them for shaping, and emoji sequences, must keep rendering. */
+const UNSAFE_DISPLAY_CHARS =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u00AD\u061C\u200B\u200E\u200F\u202A-\u202E\u2028\u2029\u2060\u2066-\u2069\uFEFF]/g;
+
+/** Returns text with every bidi and invisible control character replaced by U+FFFD, one for one, so
+ * a stored value cannot reorder or hide what is painted, in a text node or in a title attribute. */
+function displaySafe(text) {
+  return text.replace(UNSAFE_DISPLAY_CHARS, DISPLAY_MARKER);
+}
 
 /** Returns a Date for a parseable timestamp, or null for a missing or invalid one. */
 function utcDate(value) {
@@ -51,7 +64,7 @@ export function shortRepo(key) {
     return PLACEHOLDER;
   }
   const last = segments[segments.length - 1];
-  return last.endsWith(GIT_SUFFIX) ? last.slice(0, -GIT_SUFFIX.length) : last;
+  return displaySafe(last.endsWith(GIT_SUFFIX) ? last.slice(0, -GIT_SUFFIX.length) : last);
 }
 
 /** Returns a count with the default locale's digit grouping, or a placeholder when it is not a finite number. */
@@ -88,13 +101,13 @@ export function shortCommit(hash) {
   if (typeof hash !== "string" || hash === "") {
     return PLACEHOLDER;
   }
-  return hash.slice(0, COMMIT_LENGTH);
+  return displaySafe(hash.slice(0, COMMIT_LENGTH));
 }
 
-/** Returns a finding's detector name exactly as the scanner emitted it, or "unknown" when it is missing. */
+/** Returns a finding's detector name as the scanner emitted it, or "unknown" when it is missing. */
 export function detectorLabel(finding) {
   const detector = finding?.detector;
-  return typeof detector === "string" && detector !== "" ? detector : UNKNOWN_DETECTOR;
+  return typeof detector === "string" && detector !== "" ? displaySafe(detector) : UNKNOWN_DETECTOR;
 }
 
 /** Returns a finding's location as "path:line", dropping a missing line and falling back to a placeholder. */
@@ -103,14 +116,15 @@ export function fileLabel(finding) {
   if (typeof file !== "string" || file === "") {
     return PLACEHOLDER;
   }
+  const path = displaySafe(file);
   const line = finding?.line;
-  return line === null || line === undefined ? file : `${file}:${line}`;
+  return line === null || line === undefined ? path : `${path}:${line}`;
 }
 
 /** Returns a finding's redacted value, or a placeholder when the scan stored none. */
 export function redactedLabel(finding) {
   const redacted = finding?.redacted;
-  return typeof redacted === "string" && redacted !== "" ? redacted : PLACEHOLDER;
+  return typeof redacted === "string" && redacted !== "" ? displaySafe(redacted) : PLACEHOLDER;
 }
 
 /** Returns "High", "Medium" or "Low" for a repository's verified finding count. */
@@ -191,7 +205,7 @@ export function remediationText(finding) {
   const detector = detectorLabel(finding);
   const guide = finding?.raw?.ExtraData?.rotation_guide;
   if (typeof guide === "string" && guide.trim() !== "") {
-    return `Rotate this ${detector} credential using the provider's rotation guide at ${guide}, then audit recent use of the old value and remove it from the repository.`;
+    return `Rotate this ${detector} credential using the provider's rotation guide at ${displaySafe(guide)}, then audit recent use of the old value and remove it from the repository.`;
   }
   return `Rotate this ${detector} credential at its provider, then audit recent use of the old value and remove it from the repository.`;
 }

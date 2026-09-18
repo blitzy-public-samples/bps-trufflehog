@@ -195,7 +195,7 @@ export function ExecutiveDashboard({ scans, findings, scansById, triage, onNavig
             {exposure.map((row) => (
               <div className="dash-exposure-row" key={row.key}>
                 <div className="dash-exposure-name" title={row.repo}>
-                  {row.repo}
+                  <bdi>{row.repo}</bdi>
                 </div>
                 <div className="dash-exposure-count">{row.total.toLocaleString()}</div>
                 <div className="dash-exposure-track" role="img" aria-label={exposureSummary(row)}>

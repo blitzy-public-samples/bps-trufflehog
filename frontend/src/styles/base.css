@@ -30,6 +30,14 @@ select {
   color: inherit;
 }
 
+/* Scanner-supplied values (repositories, paths, detectors, redacted secrets) render inside <bdi>.
+   The isolation stops their directionality from reordering the text around them, and the fixed base
+   direction keeps the punctuation the screens add around them in the order it is stored in. */
+bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
 /* Shell */
 .shell {
   display: grid;

@@ -58,7 +58,9 @@ export function RepoLeaderboard({ findings, scansById, isLoading }) {
               return (
                 <tr className="board-row" key={row.key}>
                   <td className="board-rank">{index + 1}</td>
-                  <td className="board-repo">{row.repo}</td>
+                  <td className="board-repo">
+                    <bdi>{row.repo}</bdi>
+                  </td>
                   <td className="board-owner">{OWNER_PLACEHOLDER}</td>
                   <td className="board-num">{formatCount(row.total)}</td>
                   <td className="board-num">{formatCount(row.verified)}</td>
