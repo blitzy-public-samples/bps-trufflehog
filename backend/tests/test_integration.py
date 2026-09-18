@@ -580,3 +580,333 @@ def test_the_start_record_escapes_control_characters_in_a_target(db_path, caplog
     lines = caplog.text.splitlines()
     forged_lines = [line for line in lines if line.startswith(FORGED_RECORD_TEXT)]
     assert forged_lines == [], f"the target forged a log line: {forged_lines}"
+
+
+VALIDATION_STATUS = 422
+MISSING_BINARY_NAME = "trufflehog-does-not-exist"
+INVALID_SCAN_BODIES = (
+    ({"target": ""}, "target", "string_too_short"),
+    ({"target": "file:///tmp/x", "source": "bogus"}, "source", "literal_error"),
+)
+
+
+def _scan_ids(client) -> set[int]:
+    """Returns the id of every scan GET /api/scans serves."""
+    response = client.get("/api/scans")
+    assert response.status_code == 200, response.text
+    return {row["id"] for row in response.json()}
+
+
+def _validation_errors(response) -> list[dict]:
+    """Returns the entries of a rejected request's detail list, failing the calling test when the
+    response body carries no such list."""
+    payload = response.json()
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if not isinstance(detail, list) or not detail:
+        pytest.fail(f"expected a non-empty validation detail list, got {payload!r}")
+    return detail
+
+
+def _errors_for(response, field: str) -> list[dict]:
+    """Returns the validation errors of this response whose loc ends in field."""
+    return [error for error in _validation_errors(response) if error["loc"][-1] == field]
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize(("body", "field", "error_type"), INVALID_SCAN_BODIES)
+def test_an_invalid_scan_request_is_rejected(client, body, field, error_type):
+    """Posts a body the request model must reject and checks the 422 names the offending field and
+    its error type while the scans table stays untouched."""
+    before = _scan_ids(client)
+
+    response = client.post("/api/scans", json=body)
+
+    assert response.status_code == VALIDATION_STATUS, response.text
+    offending = _errors_for(response, field)
+    assert len(offending) == 1, _validation_errors(response)
+    assert offending[0]["type"] == error_type, offending[0]
+    assert _scan_ids(client) == before, "a rejected request must not create a scan row"
+
+
+@pytest.mark.regression
+def test_request_validation_precedes_binary_resolution(client, monkeypatch):
+    """Posts an empty target while TRUFFLEHOG_BIN names a missing executable and checks the request
+    is rejected with 422 rather than the 503 of an unresolvable binary, creating no scan row."""
+    monkeypatch.setenv("TRUFFLEHOG_BIN", MISSING_BINARY_NAME)
+    before = _scan_ids(client)
+
+    response = client.post("/api/scans", json={"target": ""})
+
+    assert response.status_code == VALIDATION_STATUS, response.text
+    assert len(_errors_for(response, "target")) == 1, _validation_errors(response)
+    assert BINARY_MISSING_DETAIL not in response.text, response.text
+    assert _scan_ids(client) == before, "a rejected request must not create a scan row"
+
+
+UNSPAWNABLE_BINARY_PATH = "/nonexistent/binary/path"
+SPAWN_FAILURE_MESSAGE = "could not start the scan subprocess"
+
+NON_UTF8_STDOUT_BYTES = b"\xff\xfe not utf8\n"
+NON_UTF8_STDOUT_TEXT = NON_UTF8_STDOUT_BYTES.decode("utf-8", errors="replace").strip()
+NON_UTF8_ASCII_RUN = "not utf8"
+REPLACEMENT_CHARACTER = "\ufffd"
+
+GARBLED_WORKER_TEMPLATE = """\
+import sys
+
+sys.stdout.buffer.write(%(garbage)s)
+sys.stdout.buffer.flush()
+sys.stdout.buffer.write(%(finding)s.encode("utf-8") + b"\\n")
+sys.stdout.buffer.flush()
+"""
+
+ORPHAN_SWEEP_MESSAGE = "marked 1 orphaned scan(s) as failed"
+ORPHAN_SWEEP_SUBJECT = "orphaned scan"
+
+
+def _garbled_worker_script() -> str:
+    """Returns Python source that writes one raw undecodable line and then one valid finding line to
+    stdout, then exits 0."""
+    return GARBLED_WORKER_TEMPLATE % {
+        "garbage": ascii(NON_UTF8_STDOUT_BYTES),
+        "finding": ascii(_finding_line()),
+    }
+
+
+def _scans_by_id() -> dict[int, dict]:
+    """Returns every stored scan object keyed by its id."""
+    return {row["id"]: row for row in db.list_scans()}
+
+
+@pytest.mark.regression
+def test_run_scan_fails_the_scan_when_the_subprocess_cannot_be_spawned(db_path, caplog):
+    """Runs the worker on a command whose binary does not exist and checks it returns without
+    raising, leaves the row failed with no exit code and no findings, and reports the spawn failure
+    once at ERROR."""
+    caplog.set_level(logging.INFO)
+    db.init_db()
+    scan_id = db.create_scan("fake", "git")["id"]
+
+    scanner.run_scan(scan_id, [UNSPAWNABLE_BINARY_PATH])
+
+    row = _stored_scan(scan_id)
+    assert row["status"] == "failed", row
+    assert row["exit_code"] is None, row
+    assert row["finished_at"], "an unspawnable scan must still record a finish time"
+    assert db.list_findings(scan_id) == []
+
+    errors = _messages(caplog, logging.ERROR)
+    assert len(errors) == 1, f"expected exactly one error record, got {errors}"
+    assert SPAWN_FAILURE_MESSAGE in errors[0], errors[0]
+    assert f"scan_id={scan_id}" in errors[0], errors[0]
+
+
+@pytest.mark.regression
+def test_run_scan_survives_undecodable_stdout_bytes(db_path, caplog):
+    """Runs a stand-in child that emits raw non-UTF-8 bytes before one valid finding and checks the
+    read loop skips the undecodable line, stores the finding, completes the scan and logs neither
+    the bytes nor their replacement text."""
+    caplog.set_level(logging.DEBUG)
+    db.init_db()
+    scan_id = db.create_scan("fake", "git")["id"]
+
+    scanner.run_scan(scan_id, [sys.executable, "-c", _garbled_worker_script()])
+
+    assert len(db.list_findings(scan_id)) == 1
+    completed = _stored_scan(scan_id)
+    assert completed["status"] == "completed", completed
+    assert completed["exit_code"] == 0, completed
+
+    skips = [m for m in _messages(caplog, logging.WARNING) if "skipped unparseable stdout line" in m]
+    assert len(skips) == 1, f"expected one warning for the undecodable line, got {skips}"
+    assert f"scan_id={scan_id}" in skips[0], skips[0]
+    assert f"length={len(NON_UTF8_STDOUT_TEXT)}" in skips[0], skips[0]
+    assert NON_UTF8_ASCII_RUN not in caplog.text, "the undecodable line reached a log record"
+    assert REPLACEMENT_CHARACTER not in caplog.text, "the replaced bytes reached a log record"
+
+
+@pytest.mark.regression
+def test_init_db_sweeps_scans_left_running(db_path, caplog):
+    """Leaves one scan running beside one completed scan across a second init_db and checks the
+    startup sweep fails only the running row, reports the count once, and changes nothing on a
+    later startup with no running scan."""
+    caplog.set_level(logging.INFO)
+    db.init_db()
+    orphan_id = db.create_scan("fake", "git")["id"]
+    settled_id = db.create_scan("fake", "git")["id"]
+    db.finish_scan(settled_id, "completed", 0)
+    settled_before = _scans_by_id()[settled_id]
+
+    db.init_db()
+
+    swept = _scans_by_id()
+    assert swept[orphan_id]["status"] == "failed", swept[orphan_id]
+    assert swept[orphan_id]["exit_code"] is None, swept[orphan_id]
+    assert swept[orphan_id]["finished_at"], "a swept scan must carry a finish time"
+    assert swept[settled_id] == settled_before, "the sweep must not touch a terminal row"
+
+    sweeps = [m for m in _messages(caplog, logging.INFO) if ORPHAN_SWEEP_MESSAGE in m]
+    assert len(sweeps) == 1, f"expected one sweep record, got {_messages(caplog, logging.INFO)}"
+
+    caplog.clear()
+    db.init_db()
+
+    assert _scans_by_id() == swept, "a startup with nothing running must change no row"
+    assert ORPHAN_SWEEP_SUBJECT not in caplog.text, caplog.text
+
+
+LONG_TARGET_LENGTH = 65536
+LONG_TARGET_FILLER = "a" * LONG_TARGET_LENGTH
+# Split across source tokens like conftest's planted token, so no line here reads as a credential.
+LONG_TARGET_CREDENTIAL = "n0t-a-real" + "-long-target-token"
+# Both shapes carry no authority for urlsplit to find, which is the redaction path that used to
+# grow with the square of the target length. Expected values are independent literals.
+LONG_TARGETS = (
+    (f"file:///tmp/qa-{LONG_TARGET_FILLER}", f"file:///tmp/qa-{LONG_TARGET_FILLER}"),
+    (
+        f"/srv/{LONG_TARGET_FILLER}/user:{LONG_TARGET_CREDENTIAL}@host/repo",
+        f"/srv/{LONG_TARGET_FILLER}/***@host/repo",
+    ),
+)
+
+SINGLE_REDACTION_TARGET = f"https://user:{MALFORMED_TARGET_CREDENTIAL}@host/org/repo.git"
+SINGLE_REDACTION_EXPECTED = "https://***@host/org/repo.git"
+
+NUL_BYTE_TARGET = "file:///tmp/a\x00b"
+LONE_SURROGATE_ARGUMENT = "file:///tmp/a\ud800b"
+UNENCODABLE_ARGUMENTS = (NUL_BYTE_TARGET, LONE_SURROGATE_ARGUMENT)
+
+NOT_FOUND_DETAIL = "scan not found"
+# Ids outside the range a SQLite INTEGER column holds, beside the boundaries that just fit it.
+UNQUERYABLE_SCAN_IDS = (2**63, 2**64, -(2**63) - 1)
+UNUSED_SCAN_IDS = (2**63 - 1, -(2**63), 0, -1, 999999)
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize(("target", "redacted"), LONG_TARGETS)
+def test_a_long_target_is_accepted_within_the_start_budget(client, monkeypatch, target, redacted):
+    """Posts a 64 KB target of each authority-less shape and checks the scan id comes back inside the
+    start budget with any credential already masked."""
+    monkeypatch.setenv("TRUFFLEHOG_BIN", sys.executable)
+
+    started = time.perf_counter()
+    response = client.post("/api/scans", json={"target": target})
+    elapsed = time.perf_counter() - started
+
+    assert response.status_code == 202, response.text
+    assert elapsed < START_BUDGET_SECONDS, (
+        f"POST of a {len(target)}-character target took {elapsed:.3f}s, "
+        f"budget {START_BUDGET_SECONDS}s"
+    )
+    accepted = response.json()
+    assert accepted["target"] == redacted, accepted["target"][-60:]
+    assert LONG_TARGET_CREDENTIAL not in accepted["target"], "a long target kept its credential"
+    assert _served_scan(client, accepted["id"])["target"] == redacted
+    # Settled before the test ends so this scan's worker cannot outlive the database it writes to.
+    assert _settled_scan(client, accepted["id"])["target"] == redacted
+
+
+@pytest.mark.regression
+def test_the_request_path_redacts_the_target_once(client, monkeypatch):
+    """Posts a credential-bearing target and checks the request redacts it exactly once, so the work
+    is not paid for twice on the way to the row and the log."""
+    monkeypatch.setenv("TRUFFLEHOG_BIN", sys.executable)
+    real_redact = scanner.redact_target
+    redactions = []
+
+    def counting_redact(target: str) -> str:
+        """Records the target it was given and returns scanner.redact_target's result for it."""
+        redactions.append(target)
+        return real_redact(target)
+
+    monkeypatch.setattr(scanner, "redact_target", counting_redact)
+
+    response = client.post("/api/scans", json={"target": SINGLE_REDACTION_TARGET})
+
+    assert response.status_code == 202, response.text
+    accepted = response.json()
+    assert redactions == [SINGLE_REDACTION_TARGET], (
+        f"the target must be redacted once per request, got {len(redactions)} redaction(s)"
+    )
+    assert accepted["target"] == SINGLE_REDACTION_EXPECTED
+    # Settled before the test ends so this scan's worker cannot outlive the database it writes to.
+    assert _settled_scan(client, accepted["id"])["target"] == SINGLE_REDACTION_EXPECTED
+
+
+@pytest.mark.regression
+def test_a_nul_byte_target_fails_the_scan_without_an_unhandled_thread_exception(
+    client, monkeypatch, caplog
+):
+    """Starts a scan whose target carries a NUL byte and checks the worker reports the spawn failure
+    at ERROR and finalizes the row failed with no exit code, leaving the thread hook untouched."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv("TRUFFLEHOG_BIN", sys.executable)
+    unhandled = []
+
+    def record_unhandled(args) -> None:
+        """Stands in for threading.excepthook, recording whatever reaches it."""
+        unhandled.append(args)
+
+    monkeypatch.setattr(threading, "excepthook", record_unhandled)
+
+    response = client.post("/api/scans", json={"target": NUL_BYTE_TARGET})
+
+    assert response.status_code == 202, response.text
+    scan_id = response.json()["id"]
+    settled = _settled_scan(client, scan_id)
+    assert settled["status"] == "failed", settled
+    assert settled["exit_code"] is None, settled
+    assert settled["finished_at"], "a scan that never spawned must still record a finish time"
+    assert unhandled == [], f"the worker thread died with an unhandled exception: {unhandled}"
+
+    errors = [m for m in _messages(caplog, logging.ERROR) if f"scan_id={scan_id}" in m]
+    assert len(errors) == 1, f"expected one spawn-failure record, got {errors}"
+    assert SPAWN_FAILURE_MESSAGE in errors[0], errors[0]
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize("argument", UNENCODABLE_ARGUMENTS)
+def test_run_scan_fails_the_scan_when_an_argument_cannot_be_encoded(db_path, caplog, argument):
+    """Runs the worker with an argument the exec layer refuses — an embedded NUL, a lone surrogate —
+    and checks it returns without raising and records one ERROR against a failed row."""
+    caplog.set_level(logging.INFO)
+    db.init_db()
+    scan_id = db.create_scan("fake", "git")["id"]
+
+    scanner.run_scan(scan_id, [sys.executable, "-c", "pass", argument])
+
+    row = _stored_scan(scan_id)
+    assert row["status"] == "failed", row
+    assert row["exit_code"] is None, row
+    assert row["finished_at"], "a scan that never spawned must still record a finish time"
+    assert db.list_findings(scan_id) == []
+
+    errors = _messages(caplog, logging.ERROR)
+    assert len(errors) == 1, f"expected exactly one error record, got {errors}"
+    assert SPAWN_FAILURE_MESSAGE in errors[0], errors[0]
+    assert f"scan_id={scan_id}" in errors[0], errors[0]
+
+
+@pytest.mark.regression
+@pytest.mark.parametrize("scan_id", UNQUERYABLE_SCAN_IDS + UNUSED_SCAN_IDS)
+def test_a_scan_id_no_row_carries_is_not_found(client, scan_id):
+    """Requests the findings of ids outside and inside the range a scan id column holds and checks
+    each answers the documented 404 JSON rather than a server error."""
+    response = client.get(f"/api/scans/{scan_id}/findings")
+
+    assert response.status_code == 404, f"id {scan_id} answered {response.status_code}"
+    assert response.headers["content-type"].startswith("application/json"), response.headers
+    assert response.json() == {"detail": NOT_FOUND_DETAIL}, response.text
+
+
+@pytest.mark.regression
+def test_a_stored_scan_id_still_serves_its_findings(client):
+    """Requests the findings of a scan row that exists and checks the id guard leaves the 200 path
+    alone."""
+    scan_id = db.create_scan("fake", "git")["id"]
+
+    response = client.get(f"/api/scans/{scan_id}/findings")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == []
+

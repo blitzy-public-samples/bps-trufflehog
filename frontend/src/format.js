@@ -25,6 +25,7 @@ const WEEK_MS = DAYS_PER_WEEK * 24 * 60 * 60 * 1000;
 const RISK_HIGH_MIN = 20;
 const RISK_MEDIUM_MIN = 8;
 const GIT_SUFFIX = ".git";
+const COUNT_FORMAT = new Intl.NumberFormat();
 
 /** Returns a Date for a parseable timestamp, or null for a missing or invalid one. */
 function utcDate(value) {
@@ -51,6 +52,14 @@ export function shortRepo(key) {
   }
   const last = segments[segments.length - 1];
   return last.endsWith(GIT_SUFFIX) ? last.slice(0, -GIT_SUFFIX.length) : last;
+}
+
+/** Returns a count with the default locale's digit grouping, or a placeholder when it is not a finite number. */
+export function formatCount(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return PLACEHOLDER;
+  }
+  return COUNT_FORMAT.format(value);
 }
 
 /** Returns a timestamp as "Sep 15" in UTC, or a placeholder when it cannot be read. */

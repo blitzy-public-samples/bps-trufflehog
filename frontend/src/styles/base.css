@@ -37,9 +37,40 @@ select {
   min-height: 100vh;
 }
 
+.shell-skip-link {
+  position: fixed;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 4;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-link);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.shell-skip-link:not(:focus) {
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .shell-sidebar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  align-self: start;
   display: flex;
   flex-direction: column;
+  height: 100vh;
+  overflow-y: auto;
   padding: var(--space-5);
   background: var(--color-sidebar);
   border-right: 1px solid var(--color-border);
@@ -80,10 +111,6 @@ select {
   cursor: pointer;
 }
 
-.shell-nav-item:hover {
-  color: var(--color-text);
-}
-
 .shell-nav-item--active,
 .shell-nav-item[aria-current="page"] {
   background: var(--color-surface-alt);
@@ -91,10 +118,20 @@ select {
   color: var(--color-text);
 }
 
+.shell-nav-item:hover {
+  border-color: var(--color-link);
+  color: var(--color-text);
+}
+
 .shell-nav-item:active {
   background: var(--color-surface);
-  border-color: var(--color-text-muted);
+  border-color: var(--color-link);
   color: var(--color-text);
+}
+
+.shell-nav-item--active:active,
+.shell-nav-item[aria-current="page"]:active {
+  background: var(--color-bg);
 }
 
 .shell-scan-form {
@@ -106,15 +143,30 @@ select {
   border-top: 1px solid var(--color-border);
 }
 
+.shell-scan-form .input {
+  padding-inline: var(--space-2);
+}
+
 .shell-scan-status {
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.shell-scan-outcome {
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
 }
 
 .shell-error {
   margin-top: var(--space-2);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
+}
+
+.shell-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .shell-main {
@@ -124,14 +176,25 @@ select {
 }
 
 .shell-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: var(--layout-header);
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.shell-header-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  flex-shrink: 0;
-  height: var(--layout-header);
+  width: 100%;
+  max-width: var(--layout-content-max);
   padding: 0 var(--space-6);
-  border-bottom: 1px solid var(--color-border);
 }
 
 .shell-title {
@@ -192,7 +255,7 @@ select {
 .btn {
   padding: var(--space-2) var(--space-3);
   background: var(--color-surface-alt);
-  border: 1px solid var(--color-text-muted);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   color: var(--color-text);
   font-size: var(--text-sm);
@@ -223,13 +286,16 @@ select {
 }
 
 .table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   background: var(--color-surface-alt);
 }
 
 .table th {
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-border);
-  color: var(--color-text-muted);
+  color: var(--color-text-dim);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--label-tracking);
@@ -244,15 +310,15 @@ select {
   vertical-align: middle;
 }
 
-.table tbody tr:hover {
-  background: var(--color-surface-alt);
+.table tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .input {
   width: 100%;
   padding: var(--space-2) var(--space-3);
   background: var(--color-surface);
-  border: 1px solid var(--color-text-muted);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   color: var(--color-text);
   font-family: var(--font-sans);
@@ -270,7 +336,7 @@ select {
 .select {
   padding: var(--space-2) var(--space-3);
   background: var(--color-surface);
-  border: 1px solid var(--color-text-muted);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   color: var(--color-text);
   font-family: var(--font-sans);
@@ -279,6 +345,11 @@ select {
 }
 
 .select:hover {
+  border-color: var(--color-link);
+}
+
+.select:not(:disabled):active {
+  background: var(--color-bg);
   border-color: var(--color-link);
 }
 

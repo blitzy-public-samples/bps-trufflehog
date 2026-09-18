@@ -56,7 +56,7 @@
 
 .board-table-card td.board-num {
   font-family: var(--font-mono);
-  font-weight: var(--weight-bold);
+  font-weight: var(--weight-semibold);
   color: var(--color-text);
 }
 

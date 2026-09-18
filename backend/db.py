@@ -48,6 +48,10 @@ FINDING_INSERT = (
     "commit_hash, redacted, raw_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
+# The range a SQLite INTEGER column holds; binding anything outside it raises OverflowError.
+MIN_SQLITE_INTEGER = -(2**63)
+MAX_SQLITE_INTEGER = 2**63 - 1
+
 
 def utc_now() -> str:
     """Returns the current UTC time as ISO-8601 text with second precision."""
@@ -134,8 +138,15 @@ def list_scans() -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def storable_id(value: int) -> bool:
+    """Returns whether value fits a SQLite INTEGER column, so it can be bound as a row id."""
+    return MIN_SQLITE_INTEGER <= value <= MAX_SQLITE_INTEGER
+
+
 def scan_exists(scan_id: int) -> bool:
-    """Returns whether a scan row with this id exists."""
+    """Returns whether a scan row with this id exists; an id no column can hold matches nothing."""
+    if not storable_id(scan_id):
+        return False
     with closing(connect()) as conn:
         row = conn.execute("SELECT 1 FROM scans WHERE id = ? LIMIT 1", (scan_id,)).fetchone()
     return row is not None
@@ -143,7 +154,10 @@ def scan_exists(scan_id: int) -> bool:
 
 def list_findings(scan_id: int | None = None) -> list[dict]:
     """Returns finding objects, newest id first, for one scan when scan_id is given or for all scans.
-    Each carries verified as a bool and raw_json parsed into raw, or {} when unusable."""
+    Each carries verified as a bool and raw_json parsed into raw, or {} when unusable. A scan_id no
+    column can hold owns no rows, so it yields an empty list without a query."""
+    if scan_id is not None and not storable_id(scan_id):
+        return []
     query = "SELECT * FROM findings"
     params: tuple = ()
     if scan_id is not None:

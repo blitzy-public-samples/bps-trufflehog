@@ -1,5 +1,17 @@
 /* Screen */
 .triage-screen {
+  /* Column shares of the table width; they sum to 100% and never depend on the rows. */
+  --triage-col-status: 11%;
+  --triage-col-type: 16%;
+  --triage-col-repo: 11%;
+  --triage-col-file: 17%;
+  --triage-col-detected: 10%;
+  --triage-col-assignee: 16%;
+  --triage-col-actions: 19%;
+  /* Width floor from the shell metrics: below it the card scrolls instead of squashing cells. */
+  --triage-table-min: calc(var(--layout-content-max) - var(--layout-sidebar) - var(--space-6) * 2);
+  --triage-type-select-max: 14%;
+  --triage-count-min: 26%;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -44,7 +56,7 @@
 }
 
 .triage-segment-btn:hover {
-  color: var(--color-text);
+  color: var(--color-link);
 }
 
 .triage-segment-btn--active {
@@ -52,16 +64,27 @@
   color: var(--color-text);
 }
 
+.triage-segment-btn:active {
+  background: var(--color-bg);
+  color: var(--color-link);
+}
+
 .triage-count {
+  min-width: var(--triage-count-min);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: var(--color-text);
   white-space: nowrap;
 }
 
+.triage-type-select {
+  max-width: var(--triage-type-select-max);
+  text-overflow: ellipsis;
+}
+
 .triage-note {
   margin-left: var(--space-1);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
   white-space: nowrap;
 }
@@ -72,13 +95,50 @@
   overflow-x: auto;
 }
 
+/* Header-driven column widths, so cell content cannot widen the table past its card. */
+.triage-table-card .table {
+  --table-cell-max: 100%;
+  table-layout: fixed;
+  min-width: var(--triage-table-min);
+}
+
+.triage-table-card thead th:nth-child(1) {
+  width: var(--triage-col-status);
+}
+
+.triage-table-card thead th:nth-child(2) {
+  width: var(--triage-col-type);
+}
+
+.triage-table-card thead th:nth-child(3) {
+  width: var(--triage-col-repo);
+}
+
+.triage-table-card thead th:nth-child(4) {
+  width: var(--triage-col-file);
+}
+
+.triage-table-card thead th:nth-child(5) {
+  width: var(--triage-col-detected);
+}
+
+.triage-table-card thead th:nth-child(6) {
+  width: var(--triage-col-assignee);
+}
+
+.triage-table-card thead th:nth-child(7) {
+  width: var(--triage-col-actions);
+}
+
 .triage-row {
   height: var(--row-height-lg);
 }
 
+/* Cells are middle-aligned inside the fixed row height, so the padding is only a floor;
+   keeping it small lets the STATUS cell carry a triage caption without growing the row. */
 .triage-table-card .triage-row > td {
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-2);
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
   vertical-align: middle;
 }
 
@@ -100,6 +160,10 @@
   color: var(--color-text-muted);
 }
 
+.triage-row:hover {
+  background: var(--color-surface-alt);
+}
+
 .triage-open {
   display: block;
   width: 100%;
@@ -113,7 +177,8 @@
   cursor: pointer;
 }
 
-.triage-open:hover .triage-primary {
+.triage-open:hover .triage-primary,
+.triage-open:focus-visible .triage-primary {
   color: var(--color-link);
   text-decoration: underline;
 }
@@ -125,15 +190,24 @@
 
 .triage-primary {
   display: block;
+  max-width: var(--table-cell-max);
+  overflow: hidden;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The FILE cell holds a path, so it reads mono like the commit line beneath it. */
+.triage-file {
+  font-family: var(--font-mono);
 }
 
 .triage-secondary {
   display: block;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
 }
 
@@ -144,14 +218,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--color-text-muted);
 }
 
 .triage-status-secondary {
   display: block;
-  margin-top: var(--space-1);
-  font-size: var(--text-xs);
+  margin-top: 0;
+  font-size: var(--text-sm);
   line-height: 1.2;
   color: var(--color-text-muted);
 }
@@ -169,4 +243,12 @@
   font-size: var(--text-sm);
   color: var(--color-text-muted);
   text-align: center;
+}
+
+/* Sticky toolbar */
+.triage-toolbar {
+  position: sticky;
+  top: var(--layout-header);
+  z-index: 2;
+  background: var(--color-bg);
 }

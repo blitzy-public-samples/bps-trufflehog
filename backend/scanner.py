@@ -23,7 +23,8 @@ MASK_THRESHOLD = 12
 STDERR_JOIN_TIMEOUT = 5
 TERMINAL_RETRY_DELAY = 0.5
 USERINFO_MASK = "***@"
-CREDENTIAL_RUN = re.compile(r"[^/?#\s]*(?::|%3[aA])[^/?#\s]*@")
+SEGMENT = re.compile(r"[^/?#\s]+")
+COLON_TOKEN = re.compile(r":|%3[aA]")
 
 
 class TrufflehogNotFoundError(RuntimeError):
@@ -42,9 +43,9 @@ def resolve_binary() -> str:
 
 
 def build_command(binary: str, source: str, target: str) -> list[str]:
-    """Returns the argument list scanning target in JSON mode, where source is the subcommand
-    ("git" or "filesystem") and target its positional argument. The flags precede the "--"
-    terminator and target comes last, so a target beginning with "-" or "@" stays a positional."""
+    """Returns [binary, source, "--json", "--no-update", "--", target] — the one argument list the
+    README documents — where source is the subcommand ("git" or "filesystem") and target its
+    positional argument, kept behind the terminator so a leading "-" or "@" stays a target."""
     return [binary, source, "--json", "--no-update", "--", target]
 
 
@@ -71,7 +72,25 @@ def _mask_credential_runs(target: str) -> str:
     """Returns target with every 'user:password@' run replaced by '***@'. It is used where no
     authority can be located safely, so an ambiguous target is over-masked rather than left with a
     credential in it; a run carrying no password, such as 'git@host:path', is untouched."""
-    return CREDENTIAL_RUN.sub(USERINFO_MASK, target)
+    if "@" not in target:
+        return target
+    # One pass over the separator-free segments, each masked up to its last '@': a scan linear in
+    # the length of the target, however long and however credential-free it is.
+    pieces = []
+    cursor = 0
+    for match in SEGMENT.finditer(target):
+        segment = match.group()
+        at = segment.rfind("@")
+        if at < 0 or COLON_TOKEN.search(segment, 0, at) is None:
+            continue
+        pieces.append(target[cursor : match.start()])
+        pieces.append(USERINFO_MASK)
+        pieces.append(segment[at + 1 :])
+        cursor = match.end()
+    if not pieces:
+        return target
+    pieces.append(target[cursor:])
+    return "".join(pieces)
 
 
 def redact_target(target: str) -> str:
@@ -166,7 +185,9 @@ def run_scan(scan_id: int, cmd: list[str]) -> None:
                 bufsize=1,
                 errors="replace",
             )
-        except OSError as exc:
+        # ValueError covers an argument the exec layer cannot encode — an embedded NUL byte,
+        # a lone surrogate — which Popen raises before the fork and which is not an OSError.
+        except (OSError, ValueError) as exc:
             logger.error("could not start the scan subprocess (scan_id=%s): %s", scan_id, exc)
             return
         stderr_drain = threading.Thread(
@@ -247,16 +268,24 @@ def run_scan(scan_id: int, cmd: list[str]) -> None:
             )
 
 
-def start_scan(scan_id: int, source: str, target: str, binary: str) -> threading.Thread:
+def start_scan(
+    scan_id: int,
+    source: str,
+    target: str,
+    binary: str,
+    redacted: str | None = None,
+) -> threading.Thread:
     """Starts run_scan for scan_id on a daemon thread and returns that thread without joining it,
-    where binary is the resolved executable, source the subcommand and target its argument. When the
+    where binary is the resolved executable, source the subcommand, target its argument and redacted
+    the already-redacted target for the log record, computed here when the caller has none. When the
     thread cannot start it attempts to mark that scan failed with no exit code, then re-raises."""
     cmd = build_command(binary, source, target)
+    logged_target = redact_target(target) if redacted is None else redacted
     logger.info(
         "starting scan (scan_id=%s, source=%s): %s",
         scan_id,
         source,
-        command_log_line(build_command(binary, source, redact_target(target))),
+        command_log_line(build_command(binary, source, logged_target)),
     )
     try:
         thread = threading.Thread(

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 
 import db
@@ -13,6 +14,8 @@ import scanner
 logging.basicConfig(level=logging.INFO)
 
 WORKER_START_UNAVAILABLE_DETAIL = "the scan worker could not be started; try again shortly"
+GZIP_MINIMUM_SIZE = 1024
+GZIP_LEVEL = 6
 
 
 @asynccontextmanager
@@ -24,6 +27,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="TruffleHog Results Pipeline", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=GZIP_MINIMUM_SIZE, compresslevel=GZIP_LEVEL)
 
 
 class ScanRequest(BaseModel):
@@ -40,9 +44,10 @@ def create_scan(req: ScanRequest):
         binary = scanner.resolve_binary()
     except scanner.TrufflehogNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    scan = db.create_scan(scanner.redact_target(req.target), req.source)
+    redacted = scanner.redact_target(req.target)
+    scan = db.create_scan(redacted, req.source)
     try:
-        scanner.start_scan(scan["id"], req.source, req.target, binary)
+        scanner.start_scan(scan["id"], req.source, req.target, binary, redacted=redacted)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=WORKER_START_UNAVAILABLE_DETAIL) from exc
     return scan

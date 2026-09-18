@@ -4,6 +4,7 @@ import { getScanFindings } from "../api.js";
 import {
   detectorLabel,
   fileLabel,
+  formatCount,
   formatDay,
   redactedLabel,
   remediationText,
@@ -17,6 +18,7 @@ import "./FindingDetail.css";
 const PLACEHOLDER = "—";
 const DEFAULT_ASSIGNEE = "Unassigned";
 const ASSIGNEES = [DEFAULT_ASSIGNEE, "Me"];
+const TRIAGE_LABELS = { resolved: "Resolved", ignored: "Ignored" };
 const EMPTY_MESSAGE = "Select a finding from Engineering Triage.";
 const BACK_LABEL = "← Back to Engineering Triage";
 const SESSION_NOTE = "Triage actions are session-only.";
@@ -32,12 +34,25 @@ function countSiblings(siblings, finding, scansById) {
   ).length;
 }
 
-/** Renders one uppercase-labelled value of the meta grid. */
+/** Returns the footer sentence for the loading, failed and loaded sibling states. */
+function siblingSentence(siblings, siblingsFailed, finding, scansById, repo) {
+  if (siblingsFailed) {
+    return SIBLINGS_UNAVAILABLE;
+  }
+  if (siblings === null) {
+    return `Counting other findings in ${repo}…`;
+  }
+  return `${formatCount(countSiblings(siblings, finding, scansById))} other finding(s) in ${repo}.`;
+}
+
+/** Renders one uppercase-labelled value of the meta grid, with the full value as its tooltip. */
 function MetaField({ label, value }) {
   return (
     <div>
       <span className="detail-meta-label">{label}</span>
-      <p className="detail-meta-value">{value}</p>
+      <p className="detail-meta-value" title={value === PLACEHOLDER ? undefined : value}>
+        {value}
+      </p>
     </div>
   );
 }
@@ -45,16 +60,18 @@ function MetaField({ label, value }) {
 /** One finding in full, from {finding, scansById, triage, onTriage, onBack}, with its scan's sibling count. */
 export function FindingDetail({ finding, scansById, triage, onTriage, onBack }) {
   const scanId = finding?.scan_id;
-  const [siblings, setSiblings] = useState([]);
+  const [siblings, setSiblings] = useState(null);
   const [siblingsFailed, setSiblingsFailed] = useState(false);
 
   useEffect(() => {
-    setSiblings([]);
     setSiblingsFailed(false);
 
     if (scanId === null || scanId === undefined) {
+      setSiblings([]);
       return undefined;
     }
+
+    setSiblings(null);
 
     let cancelled = false;
 
@@ -86,10 +103,10 @@ export function FindingDetail({ finding, scansById, triage, onTriage, onBack }) 
 
   const verified = finding.verified === true;
   const assignee = triage?.[finding.id]?.assignee ?? DEFAULT_ASSIGNEE;
+  const triageState = triage?.[finding.id]?.state;
+  const triageLabel = TRIAGE_LABELS[triageState];
   const repo = shortRepo(repoKey(finding, scansById));
-  const footerCount = siblingsFailed
-    ? SIBLINGS_UNAVAILABLE
-    : `${countSiblings(siblings, finding, scansById)} other finding(s) in ${repo}.`;
+  const footerCount = siblingSentence(siblings, siblingsFailed, finding, scansById, repo);
 
   return (
     <>
@@ -105,9 +122,14 @@ export function FindingDetail({ finding, scansById, triage, onTriage, onBack }) 
             </h2>
             <p className="detail-subtitle">{repo}</p>
           </div>
-          <span className={verified ? "badge badge--verified" : "badge badge--unverified"}>
-            {verified ? "Verified" : "Unverified"}
-          </span>
+          <div className="detail-status">
+            {triageLabel === undefined ? null : (
+              <span className="detail-state">{triageLabel}</span>
+            )}
+            <span className={verified ? "badge badge--verified" : "badge badge--unverified"}>
+              {verified ? "Verified" : "Unverified"}
+            </span>
+          </div>
         </div>
 
         <div className="detail-meta">
@@ -131,14 +153,16 @@ export function FindingDetail({ finding, scansById, triage, onTriage, onBack }) 
           <div className="detail-actions-group">
             <button
               type="button"
-              className="btn"
+              className="btn detail-action"
+              aria-pressed={triageState === "resolved"}
               onClick={() => onTriage(finding.id, { state: "resolved" })}
             >
               Resolve
             </button>
             <button
               type="button"
-              className="btn"
+              className="btn detail-action"
+              aria-pressed={triageState === "ignored"}
               onClick={() => onTriage(finding.id, { state: "ignored" })}
             >
               Ignore
