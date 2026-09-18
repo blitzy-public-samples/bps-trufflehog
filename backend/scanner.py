@@ -1,11 +1,13 @@
 """TruffleHog process boundary: binary resolution, output parsing and the background scan worker."""
 
+import contextlib
 import json
 import logging
 import os
 import shutil
 import subprocess
 import threading
+import time
 import urllib.parse
 
 import db
@@ -18,6 +20,7 @@ BINARY_MISSING_MESSAGE = "trufflehog binary not found on PATH; install it or set
 SECRET_KEYS = frozenset({"Raw", "RawV2", "SecretParts"})
 MASK_THRESHOLD = 12
 STDERR_JOIN_TIMEOUT = 5
+TERMINAL_RETRY_DELAY = 0.5
 
 
 class TrufflehogNotFoundError(RuntimeError):
@@ -77,13 +80,6 @@ def mask_secret(raw: str) -> str:
     return "*" * len(raw)
 
 
-def _text(value) -> str | None:
-    """Returns value as text, or None when it is absent or empty."""
-    if value is None or value == "":
-        return None
-    return value if isinstance(value, str) else str(value)
-
-
 def finding_from_json(obj: dict) -> dict:
     """Maps one parsed finding object onto the findings columns, leaving obj unchanged. Returns
     detector, verified, file, line, repository, commit_hash, redacted and raw_json — the object
@@ -97,14 +93,27 @@ def finding_from_json(obj: dict) -> dict:
         line = int(member.get("line"))
     except (TypeError, ValueError):
         line = None
+    # Absent and empty values drop out, so a missing key reads back as None; every other value is
+    # carried as text because each one reaches a TEXT column, directly or through mask_secret.
+    text = {
+        name: value if isinstance(value, str) else str(value)
+        for name, value in (
+            ("file", member.get("file")),
+            ("repository", member.get("repository")),
+            ("commit", member.get("commit")),
+            ("redacted", obj.get("Redacted")),
+            ("raw", obj.get("Raw")),
+        )
+        if not (value is None or value == "")
+    }
     return {
         "detector": obj.get("DetectorName") or "unknown",
         "verified": 1 if obj.get("Verified") else 0,
-        "file": _text(member.get("file")),
+        "file": text.get("file"),
         "line": line,
-        "repository": _text(member.get("repository")),
-        "commit_hash": _text(member.get("commit")),
-        "redacted": _text(obj.get("Redacted")) or mask_secret(_text(obj.get("Raw")) or ""),
+        "repository": text.get("repository"),
+        "commit_hash": text.get("commit"),
+        "redacted": text.get("redacted") or mask_secret(text.get("raw") or ""),
         "raw_json": json.dumps({k: v for k, v in obj.items() if k not in SECRET_KEYS}),
     }
 
@@ -119,34 +128,38 @@ def _drain_stderr(pipe, counter: list[int]) -> None:
 
 def run_scan(scan_id: int, cmd: list[str]) -> None:
     """Runs cmd, inserting every finding it prints as the scan progresses, and records the terminal
-    status of scan_id: 'completed' on exit code 0, 'failed' on any other code."""
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            errors="replace",
-        )
-    except OSError as exc:
-        logger.error("could not start the scan subprocess (scan_id=%s): %s", scan_id, exc)
-        db.finish_scan(scan_id, "failed", None)
-        return
-
+    status of scan_id from a single finalization: 'completed' on exit code 0, 'failed' on any other
+    code and on a code that never arrived (exit_code stays NULL for that case)."""
     stderr_lines = [0]
-    drain = threading.Thread(
-        target=_drain_stderr,
-        args=(proc.stderr, stderr_lines),
-        name=f"scan-{scan_id}-stderr",
-        daemon=True,
-    )
-    drain.start()
-
     inserted = 0
     skipped = 0
+    exit_code = None
+    proc = None
+    drain = None
     conn = None
     try:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                errors="replace",
+            )
+        except OSError as exc:
+            logger.error("could not start the scan subprocess (scan_id=%s): %s", scan_id, exc)
+            return
+        stderr_drain = threading.Thread(
+            target=_drain_stderr,
+            args=(proc.stderr, stderr_lines),
+            name=f"scan-{scan_id}-stderr",
+            daemon=True,
+        )
+        stderr_drain.start()
+        # Bound only once the thread is running, so the finalization below can tell a drain it must
+        # join from one that never started, whose pipe it owns and whose join would raise.
+        drain = stderr_drain
         conn = db.connect()
         for line in proc.stdout:
             obj = parse_line(line)
@@ -165,41 +178,62 @@ def run_scan(scan_id: int, cmd: list[str]) -> None:
             db.insert_finding(conn, scan_id, finding_from_json(obj))
             inserted += 1
         exit_code = proc.wait()
-    except Exception:
-        logger.exception("scan worker stopped before the scan finished (scan_id=%s)", scan_id)
-        proc.kill()
-        proc.wait()
-        db.finish_scan(scan_id, "failed", None)
-        return
     finally:
+        # Every cleanup step is guarded on its own: no rollback, kill, close or join failure may
+        # stop this block from reaching the terminal update below.
         if conn is not None:
-            conn.close()
-        proc.stdout.close()
-
-    drain.join(timeout=STDERR_JOIN_TIMEOUT)
-    status = "completed" if exit_code == 0 else "failed"
-    if exit_code != 0:
-        logger.warning(
-            "trufflehog exited with code %d (scan_id=%s, findings=%d)",
-            exit_code,
-            scan_id,
-            inserted,
-        )
-    db.finish_scan(scan_id, status, exit_code)
-    logger.info(
-        "scan finished (scan_id=%s, exit_code=%s, findings=%d, stdout_lines_skipped=%d, "
-        "stderr_lines_drained=%d)",
-        scan_id,
-        exit_code,
-        inserted,
-        skipped,
-        stderr_lines[0],
-    )
+            with contextlib.suppress(Exception):
+                conn.rollback()
+            with contextlib.suppress(Exception):
+                conn.close()
+        if proc is not None and exit_code is None:
+            with contextlib.suppress(Exception):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait()
+        if proc is not None:
+            with contextlib.suppress(Exception):
+                proc.stdout.close()
+            if drain is None:
+                with contextlib.suppress(Exception):
+                    proc.stderr.close()
+        drained = str(stderr_lines[0])
+        if drain is not None:
+            with contextlib.suppress(Exception):
+                drain.join(timeout=STDERR_JOIN_TIMEOUT)
+            # A grandchild that inherited the write end keeps the pipe open after the child exits,
+            # so the join stays bounded and the count is reported as a lower bound ("12+") when the
+            # drain is still running rather than as a final figure.
+            drained = f"{stderr_lines[0]}+" if drain.is_alive() else str(stderr_lines[0])
+        status = "completed" if exit_code == 0 else "failed"
+        if exit_code is not None and exit_code != 0:
+            logger.warning(
+                "trufflehog exited with code %d (scan_id=%s, findings=%d)",
+                exit_code,
+                scan_id,
+                inserted,
+            )
+        try:
+            db.finish_scan(scan_id, status, exit_code)
+        except Exception:
+            time.sleep(TERMINAL_RETRY_DELAY)
+            db.finish_scan(scan_id, status, exit_code)
+        if proc is not None:
+            logger.info(
+                "scan finished (scan_id=%s, exit_code=%s, findings=%d, stdout_lines_skipped=%d, "
+                "stderr_lines_drained=%s)",
+                scan_id,
+                exit_code,
+                inserted,
+                skipped,
+                drained,
+            )
 
 
 def start_scan(scan_id: int, source: str, target: str, binary: str) -> threading.Thread:
     """Starts run_scan for scan_id on a daemon thread and returns that thread without joining it,
-    where binary is the resolved executable, source the subcommand and target its argument."""
+    where binary is the resolved executable, source the subcommand and target its argument. Marks
+    the already-created scan failed with no exit code and re-raises when the thread cannot start."""
     cmd = build_command(binary, source, target)
     logger.info(
         "starting scan (scan_id=%s, source=%s): %s",
@@ -207,11 +241,18 @@ def start_scan(scan_id: int, source: str, target: str, binary: str) -> threading
         source,
         " ".join(build_command(binary, source, redact_target(target))),
     )
-    thread = threading.Thread(
-        target=run_scan,
-        args=(scan_id, cmd),
-        name=f"scan-{scan_id}",
-        daemon=True,
-    )
-    thread.start()
+    try:
+        thread = threading.Thread(
+            target=run_scan,
+            args=(scan_id, cmd),
+            name=f"scan-{scan_id}",
+            daemon=True,
+        )
+        thread.start()
+    except Exception:
+        # The scan row is already committed as running and no worker will ever finalize it, so
+        # compensate here; a compensation that cannot be written is swept on the next startup.
+        with contextlib.suppress(Exception):
+            db.finish_scan(scan_id, "failed", None)
+        raise
     return thread

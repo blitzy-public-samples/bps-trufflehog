@@ -18,6 +18,40 @@ function maxOf(rows, read) {
   return rows.reduce((largest, row) => Math.max(largest, read(row)), 0);
 }
 
+/** Returns one week's spoken summary: its start date, total detections and verified/unverified split. */
+function weekSummary(week) {
+  const total = week.verified + week.unverified;
+  const noun = total === 1 ? "detection" : "detections";
+  return `Week of ${formatDay(week.weekStart)}: ${total.toLocaleString()} ${noun}, ${week.verified.toLocaleString()} verified, ${week.unverified.toLocaleString()} unverified`;
+}
+
+/** Renders one week column: a bottom-aligned stack scaled to week total ÷ max, its total above it and its date below. */
+function WeekBar({ week, max }) {
+  const total = week.verified + week.unverified;
+  return (
+    <div className="dash-bar-col" role="img" aria-label={weekSummary(week)}>
+      <div className="dash-bar-plot">
+        <div className="dash-bar-group" style={{ height: ratio(total, max) }} aria-hidden="true">
+          <span className="dash-bar-total">{total.toLocaleString()}</span>
+          <div className="dash-bar-stack">
+            <div
+              className="dash-bar-seg--verified"
+              style={{ height: ratio(week.verified, total) }}
+            />
+            <div
+              className="dash-bar-seg--unverified"
+              style={{ height: ratio(week.unverified, total) }}
+            />
+          </div>
+        </div>
+      </div>
+      <span className="dash-bar-label" aria-hidden="true">
+        {formatDay(week.weekStart)}
+      </span>
+    </div>
+  );
+}
+
 /** Renders one metric tile from its label, numeric value and optional decorative dot class. */
 function MetricTile({ label, value, dotClass }) {
   return (
@@ -73,22 +107,7 @@ export default function ExecutiveDashboard({ scans, findings, scansById, triage,
           <h2 className="dash-card-title">Detections Over Time (8 weeks)</h2>
           <div className="dash-chart-area">
             {weeks.map((week) => (
-              <div className="dash-bar-col" key={week.weekStart}>
-                <span className="dash-bar-total">
-                  {(week.verified + week.unverified).toLocaleString()}
-                </span>
-                <div className="dash-bar-stack">
-                  <div
-                    className="dash-bar-seg--verified"
-                    style={{ height: ratio(week.verified, weekMax) }}
-                  />
-                  <div
-                    className="dash-bar-seg--unverified"
-                    style={{ height: ratio(week.unverified, weekMax) }}
-                  />
-                </div>
-                <span className="dash-bar-label">{formatDay(week.weekStart)}</span>
-              </div>
+              <WeekBar key={week.weekStart} week={week} max={weekMax} />
             ))}
           </div>
           <div className="dash-legend">

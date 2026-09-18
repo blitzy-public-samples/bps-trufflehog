@@ -74,6 +74,26 @@ function runningSummary(scans) {
   return { count, findings };
 }
 
+/** Returns a started scan as a list row with a running status fallback, or null when the body carries no finite id. */
+function startedRow(started) {
+  if (started === null || typeof started !== "object" || Array.isArray(started)) {
+    return null;
+  }
+  if (!Number.isFinite(started.id)) {
+    return null;
+  }
+  return { ...started, status: typeof started.status === "string" ? started.status : RUNNING };
+}
+
+/** Returns the server scans with the locally started rows in front, taking precedence over the same id. */
+function mergeScans(serverScans, pendingScans) {
+  if (pendingScans.length === 0) {
+    return serverScans;
+  }
+  const started = new Set(pendingScans.map((scan) => scan.id));
+  return [...pendingScans, ...serverScans.filter((scan) => !started.has(scan?.id))];
+}
+
 /** Sidebar form that starts a scan from {running, onStarted} and reports its own submit failures. */
 function NewScanForm({ running, onStarted }) {
   const [source, setSource] = useState(SOURCES[0]);
@@ -90,10 +110,10 @@ function NewScanForm({ running, onStarted }) {
     }
     setSubmitting(true);
     try {
-      await startScan(trimmed, source);
+      const started = await startScan(trimmed, source);
       setTarget("");
       setFormError(null);
-      await onStarted();
+      await onStarted(started);
     } catch (caught) {
       setFormError(errorText(caught));
     } finally {
@@ -178,7 +198,7 @@ function Header({ screen, newestScanAt }) {
   return (
     <header className="shell-header">
       <h1 className="shell-title">{screenLabel(screen)}</h1>
-      <p className="shell-lastscan">
+      <p className="shell-lastscan mono">
         {newestScanAt === null ? NO_SCANS : `${LAST_SCAN_PREFIX}${formatLastScan(newestScanAt)}`}
       </p>
     </header>
@@ -189,43 +209,70 @@ function Header({ screen, newestScanAt }) {
 export default function App() {
   const [screen, setScreen] = useState(DEFAULT_SCREEN);
   const [selectedFindingId, setSelectedFindingId] = useState(null);
-  const [scans, setScans] = useState([]);
+  const [serverScans, setServerScans] = useState([]);
+  const [pendingScans, setPendingScans] = useState([]);
+  const [awaitingStart, setAwaitingStart] = useState(false);
   const [findings, setFindings] = useState([]);
   const [triage, setTriageState] = useState({});
   const [error, setError] = useState(null);
+  const startSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = startSeq.current;
     try {
       const [nextScans, nextFindings] = await Promise.all([listScans(), listFindings()]);
-      setScans(Array.isArray(nextScans) ? nextScans : []);
+      const nextRows = Array.isArray(nextScans) ? nextScans : [];
+      const reported = new Set(nextRows.map((scan) => scan?.id));
+      setServerScans(nextRows);
+      setPendingScans((prev) => prev.filter((scan) => !reported.has(scan.id)));
       setFindings(Array.isArray(nextFindings) ? nextFindings : []);
+      if (seq === startSeq.current) {
+        setAwaitingStart(false);
+      }
       setError(null);
     } catch (caught) {
       setError(errorText(caught));
     }
   }, []);
 
+  /** Upserts a just-started scan from a 202 body, marks a start as awaited and returns the refresh promise. */
+  const startedScan = useCallback(
+    (started) => {
+      const row = startedRow(started);
+      startSeq.current += 1;
+      setAwaitingStart(true);
+      if (row !== null) {
+        setPendingScans((prev) => [row, ...prev.filter((scan) => scan.id !== row.id)]);
+      }
+      return load();
+    },
+    [load],
+  );
+
+  const scans = useMemo(() => mergeScans(serverScans, pendingScans), [serverScans, pendingScans]);
+
   const anyRunning = scans.some((scan) => scan?.status === RUNNING);
-  const wasRunning = useRef(false);
+  const polling = anyRunning || awaitingStart;
+  const wasPolling = useRef(false);
 
   useEffect(() => {
     load();
   }, [load]);
 
   useEffect(() => {
-    if (!anyRunning) {
+    if (!polling) {
       return undefined;
     }
     const timer = setInterval(load, POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [anyRunning, load]);
+  }, [polling, load]);
 
   useEffect(() => {
-    if (wasRunning.current && !anyRunning) {
+    if (wasPolling.current && !polling) {
       load();
     }
-    wasRunning.current = anyRunning;
-  }, [anyRunning, load]);
+    wasPolling.current = polling;
+  }, [polling, load]);
 
   const navigate = useCallback((next) => {
     setScreen(next);
@@ -303,7 +350,7 @@ export default function App() {
         running={runningSummary(scans)}
         error={error}
         onNavigate={navigate}
-        onStarted={load}
+        onStarted={startedScan}
       />
       <main className="shell-main">
         <Header screen={screen} newestScanAt={newestStartedAt(scans)} />

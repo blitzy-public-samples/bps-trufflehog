@@ -4,7 +4,9 @@ import json
 import logging
 import shutil
 import sys
+import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +29,13 @@ BANNER_LINE = (
 MALFORMED_LINE = '{"DetectorName": "Github", "Verified": '
 STDERR_MARKER = "stderr-marker-line"
 
+STREAM_FIRST_FILE = "first.env"
+STREAM_SECOND_FILE = "second.env"
+STREAM_TIMEOUT_SECONDS = 30
+STREAM_POLL_SECONDS = 0.01
+CHILD_WAIT_SECONDS = 60
+CHILD_STUCK_EXIT_CODE = 97
+
 WORKER_SCRIPT_TEMPLATE = """\
 import sys
 
@@ -40,10 +49,25 @@ print(%(marker)s, file=sys.stderr)
 %(tail)s
 """
 
+STREAM_SCRIPT_TEMPLATE = """\
+import os
+import sys
+import time
 
-def _finding_line() -> str:
-    """Returns one stdout line shaped like TruffleHog's git JSON output, carrying a synthetic secret
-    assembled at runtime."""
+sys.stdout.reconfigure(encoding="utf-8")
+print(%(first)s, flush=True)
+deadline = time.monotonic() + %(wait)s
+while not os.path.exists(%(release)s):
+    if time.monotonic() > deadline:
+        sys.exit(%(stuck)s)
+    time.sleep(%(poll)s)
+print(%(second)s, flush=True)
+"""
+
+
+def _finding_line(file: str = "config.env") -> str:
+    """Returns one stdout line shaped like TruffleHog's git JSON output for this file path, carrying a
+    synthetic secret assembled at runtime."""
     secret = "ghp_" + "x" * 36
     return json.dumps(
         {
@@ -51,7 +75,7 @@ def _finding_line() -> str:
                 "Data": {
                     "Git": {
                         "commit": "1caf0105f0b6b8b0b8a6c6d1b6ad7c9e0f2a3b4c",
-                        "file": "config.env",
+                        "file": file,
                         "email": "tests@example.invalid",
                         "repository": "file:///tmp/planted_repo",
                         "timestamp": "2026-09-16 18:19:04 +0000",
@@ -90,6 +114,19 @@ def _worker_script(exit_code: int) -> str:
     }
 
 
+def _stream_script(release_path: Path) -> str:
+    """Returns Python source that prints and flushes one finding, waits for release_path to appear
+    before printing and flushing a second finding, then exits 0."""
+    return STREAM_SCRIPT_TEMPLATE % {
+        "first": ascii(_finding_line(STREAM_FIRST_FILE)),
+        "second": ascii(_finding_line(STREAM_SECOND_FILE)),
+        "release": ascii(str(release_path)),
+        "wait": CHILD_WAIT_SECONDS,
+        "stuck": CHILD_STUCK_EXIT_CODE,
+        "poll": STREAM_POLL_SECONDS,
+    }
+
+
 def _stored_scan(scan_id: int) -> dict:
     """Returns the stored scan object with this id, failing the calling test when no row has it."""
     for row in db.list_scans():
@@ -111,6 +148,22 @@ def _served_scan(client, scan_id: int) -> dict:
 def _messages(caplog, level: int) -> list[str]:
     """Returns the formatted messages of the captured records at exactly this level."""
     return [record.getMessage() for record in caplog.records if record.levelno == level]
+
+
+def _await_findings(scan_id: int, count: int) -> list[dict]:
+    """Returns this scan's stored findings once at least count of them are queryable, failing the
+    calling test when they do not appear within the streaming budget."""
+    deadline = time.monotonic() + STREAM_TIMEOUT_SECONDS
+    rows = db.list_findings(scan_id)
+    while len(rows) < count and time.monotonic() < deadline:
+        time.sleep(STREAM_POLL_SECONDS)
+        rows = db.list_findings(scan_id)
+    if len(rows) < count:
+        pytest.fail(
+            f"scan {scan_id} exposed {len(rows)} finding(s) within {STREAM_TIMEOUT_SECONDS}s, "
+            f"expected at least {count}"
+        )
+    return rows
 
 
 @pytest.mark.skipif(
@@ -186,7 +239,9 @@ def test_run_scan_skips_unparseable_lines(db_path, caplog):
     malformed_skips = [m for m in skips if f"length={len(MALFORMED_LINE.strip())}" in m]
     assert len(malformed_skips) == 1, f"malformed line reported by length exactly once, got {skips}"
     assert MALFORMED_LINE not in caplog.text
-    assert any("skipped empty stdout line" in m for m in _messages(caplog, logging.DEBUG))
+    empty_skips = [m for m in _messages(caplog, logging.DEBUG) if "skipped empty stdout line" in m]
+    assert len(empty_skips) == 1, f"expected exactly one empty-line debug record, got {empty_skips}"
+    assert f"scan_id={scan_id}" in empty_skips[0]
     assert STDERR_MARKER not in caplog.text
 
     caplog.clear()
@@ -198,6 +253,44 @@ def test_run_scan_skips_unparseable_lines(db_path, caplog):
     assert failed["exit_code"] == 3
     assert len(db.list_findings(failing_id)) == 1
     assert any("exited with code 3" in m for m in _messages(caplog, logging.WARNING))
+
+
+def test_run_scan_commits_findings_while_running(db_path, tmp_path):
+    """Drives the scan worker on its own thread against a child that emits one finding, blocks, then
+    emits a second, and checks each finding is stored before the scan reaches a terminal status."""
+    db.init_db()
+    release = tmp_path / "release-second-finding"
+    scan_id = db.create_scan("fake", "git")["id"]
+
+    worker = threading.Thread(
+        target=scanner.run_scan,
+        args=(scan_id, [sys.executable, "-c", _stream_script(release)]),
+        name=f"test-scan-{scan_id}",
+        daemon=True,
+    )
+    worker.start()
+    try:
+        streamed = _await_findings(scan_id, 1)
+        assert [row["file"] for row in streamed] == [STREAM_FIRST_FILE]
+
+        mid_scan = _stored_scan(scan_id)
+        assert mid_scan["status"] == "running", mid_scan
+        assert mid_scan["exit_code"] is None, mid_scan
+        assert mid_scan["finished_at"] is None, mid_scan
+        assert mid_scan["finding_count"] == 1, mid_scan
+    finally:
+        release.write_text("release", encoding="utf-8")
+
+    worker.join(timeout=STREAM_TIMEOUT_SECONDS)
+    assert not worker.is_alive(), f"the scan worker ran past {STREAM_TIMEOUT_SECONDS}s"
+
+    rows = db.list_findings(scan_id)
+    assert sorted(row["file"] for row in rows) == [STREAM_FIRST_FILE, STREAM_SECOND_FILE]
+
+    finished = _stored_scan(scan_id)
+    assert finished["status"] == "completed", finished
+    assert finished["exit_code"] == 0
+    assert finished["finding_count"] == 2
 
 
 def test_unknown_scan_404(client):
@@ -219,3 +312,172 @@ def test_missing_binary_503(client, monkeypatch):
     assert response.status_code == 503, response.text
     assert response.json()["detail"] == BINARY_MISSING_DETAIL
     assert len(client.get("/api/scans").json()) == before
+
+
+GRANDCHILD_LIFETIME_SECONDS = 2.0
+TINY_JOIN_TIMEOUT_SECONDS = 0.05
+
+LINGERING_WORKER_TEMPLATE = """\
+import subprocess
+import sys
+
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+print(%(finding)s)
+print(%(marker)s, file=sys.stderr)
+sys.stdout.flush()
+sys.stderr.flush()
+subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(%(sleep).1f)"],
+    stdout=subprocess.DEVNULL,
+)
+"""
+
+
+def _lingering_worker_script() -> str:
+    """Returns Python source that prints one finding to stdout and one line to stderr, leaves a
+    grandchild holding the inherited stderr pipe for GRANDCHILD_LIFETIME_SECONDS, then exits 0."""
+    return LINGERING_WORKER_TEMPLATE % {
+        "finding": ascii(_finding_line()),
+        "marker": ascii(STDERR_MARKER),
+        "sleep": GRANDCHILD_LIFETIME_SECONDS,
+    }
+
+
+def test_run_scan_finalizes_and_guards_the_terminal_update(db_path):
+    """Checks the worker's single finalization path: a finding insert that fails still records a
+    terminal status, and a terminal update that fails once is retried."""
+    import sqlite3
+
+    db.init_db()
+    stuck_id = db.create_scan("fake", "git")["id"]
+
+    def refuse_insert(conn, scan_id, finding):
+        """Fails every insert the way a locked database does."""
+        raise sqlite3.OperationalError("database is locked")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(db, "insert_finding", refuse_insert)
+        with pytest.raises(sqlite3.OperationalError):
+            scanner.run_scan(stuck_id, [sys.executable, "-c", _worker_script(0)])
+
+    stuck = _stored_scan(stuck_id)
+    assert stuck["status"] == "failed", "a failed insert must not leave the row running"
+    assert stuck["exit_code"] is None
+    assert db.list_findings(stuck_id) == []
+
+    retried_id = db.create_scan("fake", "git")["id"]
+    real_finish = db.finish_scan
+    finish_calls = []
+
+    def flaky_finish(scan_id, status, exit_code):
+        """Fails the first terminal update and delegates every later one to db.finish_scan."""
+        finish_calls.append((scan_id, status, exit_code))
+        if len(finish_calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        real_finish(scan_id, status, exit_code)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(db, "finish_scan", flaky_finish)
+        patch.setattr(scanner, "TERMINAL_RETRY_DELAY", 0)
+        scanner.run_scan(retried_id, [sys.executable, "-c", _worker_script(0)])
+
+    assert len(finish_calls) == 2, f"the terminal update is attempted twice, got {finish_calls}"
+    retried = _stored_scan(retried_id)
+    assert retried["status"] == "completed"
+    assert retried["exit_code"] == 0
+
+
+def test_start_scan_marks_the_scan_failed_when_the_worker_thread_cannot_start(client, monkeypatch):
+    """Starts a scan whose worker thread refuses to start and expects a controlled 503 plus a scan
+    row marked failed with no exit code rather than one stuck in 'running'."""
+    import types
+
+    import main
+
+    constructed = []
+
+    class RefusingThread:
+        """Stands in for threading.Thread: records its construction and refuses to start."""
+
+        def __init__(self, *args, **kwargs):
+            """Records the keyword arguments start_scan constructed this thread with."""
+            constructed.append(kwargs)
+
+        def start(self):
+            """Raises the error threading.Thread raises when the host cannot create a thread."""
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setenv("TRUFFLEHOG_BIN", sys.executable)
+    monkeypatch.setattr(scanner, "threading", types.SimpleNamespace(Thread=RefusingThread))
+    before = {row["id"] for row in client.get("/api/scans").json()}
+
+    response = client.post("/api/scans", json={"target": "file:///tmp/unused"})
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"] == main.WORKER_START_UNAVAILABLE_DETAIL
+    assert [kwargs["target"] for kwargs in constructed] == [scanner.run_scan]
+    created = [row for row in client.get("/api/scans").json() if row["id"] not in before]
+    assert len(created) == 1, created
+    assert created[0]["status"] == "failed", "a worker-less row must not stay running"
+    assert created[0]["exit_code"] is None
+
+
+def test_completion_record_reports_an_unfinished_stderr_drain(db_path, caplog):
+    """Runs a worker that leaves a grandchild holding the stderr pipe and checks that finalization
+    is neither blocked nor stalled and that the completion record qualifies the drained count."""
+    caplog.set_level(logging.INFO)
+    db.init_db()
+    scan_id = db.create_scan("fake", "git")["id"]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(scanner, "STDERR_JOIN_TIMEOUT", TINY_JOIN_TIMEOUT_SECONDS)
+        started = time.perf_counter()
+        scanner.run_scan(scan_id, [sys.executable, "-c", _lingering_worker_script()])
+        elapsed = time.perf_counter() - started
+
+    completed = _stored_scan(scan_id)
+    assert completed["status"] == "completed"
+    assert completed["exit_code"] == 0
+    assert elapsed < GRANDCHILD_LIFETIME_SECONDS / 2, f"the worker waited {elapsed:.3f}s on stderr"
+
+    summaries = [m for m in _messages(caplog, logging.INFO) if "scan finished" in m]
+    assert len(summaries) == 1, summaries
+    drained = summaries[0].split("stderr_lines_drained=")[1].rstrip(")")
+    assert drained.endswith("+"), f"an unfinished drain must not read as a final count: {drained}"
+    assert STDERR_MARKER not in caplog.text
+
+
+DRAIN_START_FAILURE = "refusing to start the stderr drain"
+
+
+def test_run_scan_finalizes_when_the_stderr_drain_cannot_start(db_path, caplog):
+    """Refuses to start the stderr drain and checks that the worker still records a terminal status
+    and propagates the original failure rather than an error from joining an unstarted thread."""
+    import threading
+    import types
+
+    caplog.set_level(logging.INFO)
+    db.init_db()
+    scan_id = db.create_scan("fake", "git")["id"]
+
+    class UnstartableThread(threading.Thread):
+        """Stands in for the drain thread: constructs normally and refuses to start."""
+
+        def start(self):
+            """Raises the error threading.Thread raises when the host cannot create a thread."""
+            raise RuntimeError(DRAIN_START_FAILURE)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(scanner, "threading", types.SimpleNamespace(Thread=UnstartableThread))
+        with pytest.raises(RuntimeError, match=DRAIN_START_FAILURE):
+            scanner.run_scan(scan_id, [sys.executable, "-c", _worker_script(0)])
+
+    row = _stored_scan(scan_id)
+    assert row["status"] == "failed", "a drain that cannot start must not leave the row running"
+    assert row["exit_code"] is None
+
+    summaries = [m for m in _messages(caplog, logging.INFO) if "scan finished" in m]
+    assert len(summaries) == 1, summaries
+    assert "stderr_lines_drained=0" in summaries[0]
+    assert STDERR_MARKER not in caplog.text

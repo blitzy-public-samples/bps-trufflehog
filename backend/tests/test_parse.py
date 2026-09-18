@@ -3,12 +3,15 @@
 import json
 import logging
 
-import pytest
-
 import scanner
 
 # Joined at runtime so this file's own text matches no GitHub token pattern.
 RAW = "ghp_" + "x" * 36
+
+# Expected masks written out rather than computed, so mask_secret is never its own oracle.
+MASKED_RAW = "ghp_\u2026xxxx"
+SHORT_RAW = "a" * 12
+MASKED_SHORT_RAW = "*" * 12
 
 COMMIT = "1caf0105" + "9f3c" * 8
 REPOSITORY = "file:///tmp/fixture"
@@ -77,8 +80,9 @@ def finding_line(**overrides) -> str:
 
 
 def test_valid_finding_line():
-    """A printer-shaped line parses into an object whose mapping fills every findings column and
-    keeps the plaintext secret out of the stored JSON."""
+    """A printer-shaped line parses into an object whose mapping fills every findings column, and
+    the masked display value keeps the plaintext secret out of both that column and the stored
+    JSON."""
     obj = scanner.parse_line(finding_line())
     assert isinstance(obj, dict)
 
@@ -89,7 +93,17 @@ def test_valid_finding_line():
     assert mapped["line"] == 1
     assert mapped["repository"] == REPOSITORY
     assert mapped["commit_hash"] == COMMIT
-    assert mapped["redacted"] == scanner.mask_secret(RAW)
+    assert mapped["redacted"] == MASKED_RAW, f"expected {MASKED_RAW!r}, got {mapped['redacted']!r}"
+    assert mapped["redacted"] != RAW, "plaintext secret stored as the display value"
+    assert RAW not in mapped["redacted"], "display value carries the plaintext secret"
+
+    assert scanner.mask_secret(RAW) == MASKED_RAW, f"mask of a long secret is {MASKED_RAW!r}"
+    assert scanner.mask_secret(SHORT_RAW) == MASKED_SHORT_RAW, (
+        f"mask of the {len(SHORT_RAW)}-character {SHORT_RAW!r} is {MASKED_SHORT_RAW!r}"
+    )
+    assert scanner.mask_secret(SHORT_RAW) != SHORT_RAW, "short secret returned in plaintext"
+    assert SHORT_RAW not in scanner.mask_secret(SHORT_RAW), "short secret survived masking"
+    assert scanner.mask_secret("") == "", "an absent secret masks to an empty display value"
 
     stored = json.loads(mapped["raw_json"])
     for key in ("Raw", "RawV2", "SecretParts"):
@@ -107,22 +121,22 @@ def test_malformed_line(caplog):
     assert caplog.records == [], "parse_line must leave skip logging to the scan worker"
 
 
-@pytest.mark.parametrize("line", ["", "\n", "   \n"])
-def test_empty_line(line):
+def test_empty_line():
     """Blank and whitespace-only stdout lines yield None."""
-    assert scanner.parse_line(line) is None
+    for line in ("", "\n", "   \n"):
+        assert scanner.parse_line(line) is None, f"{line!r} must be skipped"
 
 
-@pytest.mark.parametrize("line", BANNER_LINES)
-def test_banner_line(line):
+def test_banner_line():
     """The human banner and result lines TruffleHog prints without a machine format yield None."""
-    assert scanner.parse_line(line) is None
+    for line in BANNER_LINES:
+        assert scanner.parse_line(line) is None, f"{line!r} must be skipped"
 
 
-@pytest.mark.parametrize("line", ["42", "[1, 2]"])
-def test_non_object_json(line):
+def test_non_object_json():
     """Valid JSON that is not a finding object yields None."""
-    assert scanner.parse_line(line) is None
+    for line in ("42", "[1, 2]"):
+        assert scanner.parse_line(line) is None, f"{line!r} must be skipped"
 
 
 def test_filesystem_metadata():
@@ -144,7 +158,7 @@ def test_redacted_preferred_over_mask():
     mapped = scanner.finding_from_json(scanner.parse_line(finding_line(redacted=redacted)))
 
     assert mapped["redacted"] == redacted
-    assert mapped["redacted"] != scanner.mask_secret(RAW)
+    assert mapped["redacted"] != MASKED_RAW, "the mask of Raw replaced the reported Redacted value"
 
 
 def test_build_command():
@@ -156,15 +170,14 @@ def test_build_command():
     assert "--no-verification" not in cmd, "verification drives the Verified badge and stays on"
 
 
-@pytest.mark.parametrize(
-    ("target", "expected"),
-    [
+def test_redact_target():
+    """URL userinfo is replaced by '***@'; targets carrying no credentials pass through unchanged."""
+    cases = (
         ("https://user:tok@host/org/repo.git", "https://***@host/org/repo.git"),
         ("https://host/org/repo.git", "https://host/org/repo.git"),
         ("file:///tmp/r", "file:///tmp/r"),
         ("/srv/code", "/srv/code"),
-    ],
-)
-def test_redact_target(target, expected):
-    """URL userinfo is replaced by '***@'; targets carrying no credentials pass through unchanged."""
-    assert scanner.redact_target(target) == expected
+    )
+
+    for target, expected in cases:
+        assert scanner.redact_target(target) == expected, f"{target!r} must redact to {expected!r}"

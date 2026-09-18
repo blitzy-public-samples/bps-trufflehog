@@ -3,7 +3,6 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: var(--space-4);
-  margin-bottom: var(--space-4);
 }
 
 .dash-tile {
@@ -51,7 +50,6 @@
   display: grid;
   grid-template-columns: 2fr 1fr;
   gap: var(--space-4);
-  margin-bottom: var(--space-4);
 }
 
 .dash-card-title {
@@ -80,20 +78,39 @@
   min-width: 0;
 }
 
+.dash-bar-plot {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  margin-top: calc(var(--text-xs) + var(--space-3));
+}
+
+.dash-bar-group {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
 .dash-bar-total {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
   margin-bottom: var(--space-1);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+  text-align: center;
 }
 
 .dash-bar-stack {
   display: flex;
-  flex: 1;
   flex-direction: column;
   justify-content: flex-end;
   width: 100%;
-  min-height: 0;
+  height: 100%;
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
@@ -151,7 +168,7 @@
   justify-content: space-between;
   gap: var(--space-3);
   padding: var(--space-2) 0;
-  border-top: thin solid var(--color-border);
+  border-top: 1px solid var(--color-border);
   color: var(--color-text-muted);
   font-size: var(--text-sm);
 }

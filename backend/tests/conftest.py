@@ -56,5 +56,5 @@ def planted_repo(tmp_path):
         _git(repo, "config", key, value)
     (repo / "config.env").write_text(f"GITHUB_TOKEN={PLANTED_TOKEN}\n", encoding="utf-8")
     _git(repo, "add", "config.env")
-    _git(repo, "commit", "-m", "Add service configuration")
+    _git(repo, "commit", "-q", "-m", "Add service configuration")
     yield "file://" + str(repo)

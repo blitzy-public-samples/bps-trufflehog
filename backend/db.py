@@ -142,7 +142,8 @@ def scan_exists(scan_id: int) -> bool:
 
 
 def list_findings(scan_id: int | None = None) -> list[dict]:
-    """Returns finding objects, newest id first, for one scan when scan_id is given or for all scans."""
+    """Returns finding objects, newest id first, for one scan when scan_id is given or for all scans.
+    Each carries verified as a bool and raw_json parsed into raw, or {} when unusable."""
     query = "SELECT * FROM findings"
     params: tuple = ()
     if scan_id is not None:
@@ -151,7 +152,30 @@ def list_findings(scan_id: int | None = None) -> list[dict]:
     query += " ORDER BY id DESC"
     with closing(connect()) as conn:
         rows = conn.execute(query, params).fetchall()
-    return [_row_to_finding(row) for row in rows]
+    findings = []
+    for row in rows:
+        try:
+            raw = json.loads(row["raw_json"])
+        except (json.JSONDecodeError, TypeError):
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        findings.append(
+            {
+                "id": row["id"],
+                "scan_id": row["scan_id"],
+                "detector": row["detector"],
+                "verified": bool(row["verified"]),
+                "file": row["file"],
+                "line": row["line"],
+                "repository": row["repository"],
+                "commit_hash": row["commit_hash"],
+                "redacted": row["redacted"],
+                "created_at": row["created_at"],
+                "raw": raw,
+            }
+        )
+    return findings
 
 
 def insert_finding(conn: sqlite3.Connection, scan_id: int, finding: dict) -> None:
@@ -172,26 +196,3 @@ def insert_finding(conn: sqlite3.Connection, scan_id: int, finding: dict) -> Non
         ),
     )
     conn.commit()
-
-
-def _row_to_finding(row: sqlite3.Row) -> dict:
-    """Converts a findings row into a finding object with a bool verified and raw_json parsed as raw."""
-    try:
-        raw = json.loads(row["raw_json"])
-    except (json.JSONDecodeError, TypeError):
-        raw = {}
-    if not isinstance(raw, dict):
-        raw = {}
-    return {
-        "id": row["id"],
-        "scan_id": row["scan_id"],
-        "detector": row["detector"],
-        "verified": bool(row["verified"]),
-        "file": row["file"],
-        "line": row["line"],
-        "repository": row["repository"],
-        "commit_hash": row["commit_hash"],
-        "redacted": row["redacted"],
-        "created_at": row["created_at"],
-        "raw": raw,
-    }

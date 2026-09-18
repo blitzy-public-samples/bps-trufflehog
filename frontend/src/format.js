@@ -1,4 +1,4 @@
-/** Pure UTC-based derivations shared by the four screens. */
+/** Pure UTC-based derivations and display labels shared by the four screens. */
 
 const MONTHS = [
   "Jan",
@@ -16,6 +16,7 @@ const MONTHS = [
 ];
 
 const PLACEHOLDER = "—";
+const UNKNOWN_DETECTOR = "unknown";
 const SEPARATOR = "·";
 const COMMIT_LENGTH = 7;
 const WEEK_COUNT = 8;
@@ -79,6 +80,28 @@ export function shortCommit(hash) {
     return PLACEHOLDER;
   }
   return hash.slice(0, COMMIT_LENGTH);
+}
+
+/** Returns a finding's detector name exactly as the scanner emitted it, or "unknown" when it is missing. */
+export function detectorLabel(finding) {
+  const detector = finding?.detector;
+  return typeof detector === "string" && detector !== "" ? detector : UNKNOWN_DETECTOR;
+}
+
+/** Returns a finding's location as "path:line", dropping a missing line and falling back to a placeholder. */
+export function fileLabel(finding) {
+  const file = finding?.file;
+  if (typeof file !== "string" || file === "") {
+    return PLACEHOLDER;
+  }
+  const line = finding?.line;
+  return line === null || line === undefined ? file : `${file}:${line}`;
+}
+
+/** Returns a finding's redacted value, or a placeholder when the scan stored none. */
+export function redactedLabel(finding) {
+  const redacted = finding?.redacted;
+  return typeof redacted === "string" && redacted !== "" ? redacted : PLACEHOLDER;
 }
 
 /** Returns "High", "Medium" or "Low" for a repository's verified finding count. */
@@ -156,10 +179,7 @@ export function weeklyBuckets(findings, now = new Date()) {
 
 /** Returns a one-sentence rotation instruction naming the detector, citing its rotation guide when the finding carries one. */
 export function remediationText(finding) {
-  const detector =
-    typeof finding?.detector === "string" && finding.detector !== ""
-      ? finding.detector
-      : "unknown";
+  const detector = detectorLabel(finding);
   const guide = finding?.raw?.ExtraData?.rotation_guide;
   if (typeof guide === "string" && guide.trim() !== "") {
     return `Rotate this ${detector} credential using the provider's rotation guide at ${guide}, then audit recent use of the old value and remove it from the repository.`;

@@ -1,12 +1,19 @@
 import { useMemo, useState } from "react";
 
-import { formatDay, repoKey, shortCommit, shortRepo } from "../format.js";
+import {
+  detectorLabel,
+  fileLabel,
+  formatDay,
+  redactedLabel,
+  repoKey,
+  shortCommit,
+  shortRepo,
+} from "../format.js";
 
 import "./EngineeringTriage.css";
 
 const ALL_TYPES = "all";
 const PLACEHOLDER = "—";
-const UNKNOWN_DETECTOR = "unknown";
 const DEFAULT_ASSIGNEE = "Unassigned";
 const ASSIGNEES = [DEFAULT_ASSIGNEE, "Me"];
 const TRIAGE_LABELS = { resolved: "Resolved", ignored: "Ignored" };
@@ -15,28 +22,6 @@ const STATUS_FILTERS = [
   { value: "verified", label: "Verified" },
   { value: "unverified", label: "Unverified" },
 ];
-
-/** Returns a finding's detector name exactly as the scanner emitted it, or "unknown" when it is missing. */
-function detectorLabel(finding) {
-  const detector = finding?.detector;
-  return typeof detector === "string" && detector !== "" ? detector : UNKNOWN_DETECTOR;
-}
-
-/** Returns a finding's location as "path:line", dropping a missing line and falling back to a placeholder. */
-function fileLabel(finding) {
-  const file = finding?.file;
-  if (typeof file !== "string" || file === "") {
-    return PLACEHOLDER;
-  }
-  const line = finding?.line;
-  return line === null || line === undefined ? file : `${file}:${line}`;
-}
-
-/** Returns a finding's redacted value, or a placeholder when the scan stored none. */
-function redactedLabel(finding) {
-  const redacted = finding?.redacted;
-  return typeof redacted === "string" && redacted !== "" ? redacted : PLACEHOLDER;
-}
 
 /** Returns the distinct detector names present in the findings, sorted alphabetically. */
 function detectorNames(findings) {
@@ -71,6 +56,7 @@ function matchesSelections(finding, statusFilter, typeFilter) {
 function TriageRow({ finding, scansById, entry, onTriage, onSelectFinding }) {
   const verified = finding.verified === true;
   const triageLabel = TRIAGE_LABELS[entry?.state];
+  const commit = shortCommit(finding.commit_hash);
   const openFinding = () => onSelectFinding(finding.id);
 
   return (
@@ -93,7 +79,9 @@ function TriageRow({ finding, scansById, entry, onTriage, onSelectFinding }) {
       <td>
         <button type="button" className="triage-open" onClick={openFinding}>
           <span className="triage-primary">{fileLabel(finding)}</span>
-          <span className="triage-secondary">{`commit ${shortCommit(finding.commit_hash)}`}</span>
+          <span className="triage-secondary">
+            {commit === PLACEHOLDER ? PLACEHOLDER : `commit ${commit}`}
+          </span>
         </button>
       </td>
       <td>

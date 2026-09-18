@@ -897,8 +897,10 @@ The `backend/` and `frontend/` directories hold a prototype results pipeline bui
 TruffleHog itself is not modified: there is no fork, no vendored copy, and no new or altered CLI flags. The backend invokes the published binary with documented flags only.
 
 ```bash
-trufflehog <source> <target> --json --no-update
+trufflehog git file:///path/to/repo --json --no-update
 ```
+
+Only the first two arguments vary: the first is the source subcommand, either `git` or `filesystem`, and the second is that subcommand's target — a repository URI for `git`, a path for `filesystem`. A local repository must be given to the `git` source with a `file://` prefix, as above. `--json` and `--no-update` are always appended.
 
 The backend serves four routes:
 
@@ -907,17 +909,17 @@ The backend serves four routes:
 - `GET /api/scans/{scan_id}/findings` — list the findings of one scan
 - `GET /api/findings` — list every finding across all scans
 
-A scan is `running` while its subprocess is alive, then `completed` when the subprocess exits 0 and `failed` for any other exit code; the code itself is recorded with the scan. Findings are inserted as they are printed, so progress is visible before a scan ends. The frontend polls these routes to follow it; there is no push or streaming channel.
+A scan is `running` while its subprocess is alive, then `completed` when the subprocess exits 0 and `failed` for any other exit code; the return code itself is recorded with the scan whenever one is available. It is `null` in the three cases where no code was ever reported: the subprocess could not be spawned at all, the worker stopped before the scan finished, or the backend was restarted while the scan was still `running`. A `null` code alongside `failed` therefore means the scan never finished, as distinct from a real non-zero exit. Findings are inserted as they are printed, so progress is visible before a scan ends. The frontend polls these routes to follow it; there is no push or streaming channel.
 
 ## Prerequisites
 
-The `trufflehog` binary must be on the PATH of the host running the backend. Install it through any of the channels in the Installation section above, then confirm it is reachable.
+The `trufflehog` binary must be on the PATH of the host running the backend. Use one of the channels in the Installation section above that leaves an executable on the host: MacOS users (Homebrew), Binary releases, Compile from source, or Using installation script. The Docker examples in that section run the scanner inside a container and install no host executable, so they do not satisfy this prerequisite. Once installed, confirm the binary is reachable.
 
 ```bash
 trufflehog --version
 ```
 
-`git` 2.20 or newer must also be on PATH for `git`-source scans. If the binary is missing the backend still starts, but every `POST /api/scans` answers with HTTP 503 until it is installed. Setting `TRUFFLEHOG_BIN=/explicit/path/trufflehog` names an executable directly and bypasses the PATH lookup.
+`git` must also be on PATH for `git`-source scans, at 2.20 or newer within the 2.x series (`>=2.20.0,<3.0.0`) — the scanner rejects anything outside that range, including 3.x. If the `trufflehog` binary is missing the backend still starts, but every valid `POST /api/scans` answers with HTTP 503 until it is installed; the check runs after request validation, so a malformed body still gets the usual HTTP 422. Setting `TRUFFLEHOG_BIN=/explicit/path/trufflehog` names an executable directly and bypasses the PATH lookup.
 
 The backend process must be started and left running, because scans are tracked inside it. Stopping it stops ingesting an in-flight scan, and the next start marks any scan left in `running` as `failed`. A `trufflehog` child that was already spawned is not signalled and may keep running until it exits on its own.
 

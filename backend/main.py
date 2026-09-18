@@ -12,7 +12,7 @@ import scanner
 
 logging.basicConfig(level=logging.INFO)
 
-logger = logging.getLogger(__name__)
+WORKER_START_UNAVAILABLE_DETAIL = "the scan worker could not be started; try again shortly"
 
 
 @asynccontextmanager
@@ -20,7 +20,6 @@ async def lifespan(app: FastAPI):
     """Creates the schema and sweeps orphaned scans before requests are served; yields nothing and
     has no shutdown work."""
     db.init_db()
-    logger.info("results pipeline ready (database=%s)", db.db_path())
     yield
 
 
@@ -35,13 +34,17 @@ class ScanRequest(BaseModel):
 @app.post("/api/scans", status_code=202)
 def create_scan(req: ScanRequest):
     """Starts a background scan of the requested target and returns the new running scan object.
-    Fails with 503 when no trufflehog executable resolves, before any scan row is written."""
+    Fails with 503 when no trufflehog executable resolves, before any scan row is written, and with
+    503 when the worker cannot start, after start_scan has marked that row failed."""
     try:
         binary = scanner.resolve_binary()
     except scanner.TrufflehogNotFoundError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     scan = db.create_scan(scanner.redact_target(req.target), req.source)
-    scanner.start_scan(scan["id"], req.source, req.target, binary)
+    try:
+        scanner.start_scan(scan["id"], req.source, req.target, binary)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=WORKER_START_UNAVAILABLE_DETAIL) from exc
     return scan
 
 

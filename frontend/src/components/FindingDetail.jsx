@@ -1,12 +1,20 @@
 import { useEffect, useState } from "react";
 
 import { getScanFindings } from "../api.js";
-import { formatDay, remediationText, repoKey, shortCommit, shortRepo } from "../format.js";
+import {
+  detectorLabel,
+  fileLabel,
+  formatDay,
+  redactedLabel,
+  remediationText,
+  repoKey,
+  shortCommit,
+  shortRepo,
+} from "../format.js";
 
 import "./FindingDetail.css";
 
 const PLACEHOLDER = "—";
-const UNKNOWN_DETECTOR = "unknown";
 const DEFAULT_ASSIGNEE = "Unassigned";
 const ASSIGNEES = [DEFAULT_ASSIGNEE, "Me"];
 const EMPTY_MESSAGE = "Select a finding from Engineering Triage.";
@@ -15,28 +23,6 @@ const SESSION_NOTE = "Triage actions are session-only.";
 const SIBLINGS_UNAVAILABLE = "Sibling count unavailable";
 const TITLE_ID = "detail-finding-title";
 const ASSIGNEE_ID = "detail-assignee-select";
-
-/** Returns a finding's detector name exactly as the scanner emitted it, or "unknown" when it is missing. */
-function detectorLabel(finding) {
-  const detector = finding?.detector;
-  return typeof detector === "string" && detector !== "" ? detector : UNKNOWN_DETECTOR;
-}
-
-/** Returns a finding's location as "path:line", dropping a missing line and falling back to a placeholder. */
-function fileLabel(finding) {
-  const file = finding?.file;
-  if (typeof file !== "string" || file === "") {
-    return PLACEHOLDER;
-  }
-  const line = finding?.line;
-  return line === null || line === undefined ? file : `${file}:${line}`;
-}
-
-/** Returns a finding's redacted value, or a placeholder when the scan stored none. */
-function redactedLabel(finding) {
-  const redacted = finding?.redacted;
-  return typeof redacted === "string" && redacted !== "" ? redacted : PLACEHOLDER;
-}
 
 /** Returns the number of the scan's other findings that share the selected finding's repository key. */
 function countSiblings(siblings, finding, scansById) {
