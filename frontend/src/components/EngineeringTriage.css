@@ -61,7 +61,7 @@
 }
 
 /* table */
-.triage-table-card {
+.card.triage-table-card {
   padding: 0;
   overflow-x: auto;
 }
@@ -70,10 +70,20 @@
   height: var(--row-height-lg);
 }
 
-.triage-row > td {
+.triage-table-card .triage-row > td {
   padding-top: var(--space-2);
   padding-bottom: var(--space-2);
   vertical-align: middle;
+}
+
+.triage-table-card .triage-repo {
+  max-width: var(--layout-sidebar);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .triage-row--muted {
@@ -122,6 +132,7 @@
   display: block;
   margin-top: var(--space-1);
   font-size: var(--text-xs);
+  line-height: 1.2;
   color: var(--color-text-dim);
 }
 
