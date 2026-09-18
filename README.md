@@ -890,6 +890,85 @@ We no longer accept contributions to TruffleHog v2, but that code is available i
 
 We have published some [documentation and tooling to get started on adding new secret detectors](hack/docs/Adding_Detectors_external.md). Let's improve detection together!
 
+# :bar_chart: Results Pipeline (prototype)
+
+The `backend/` and `frontend/` directories hold a prototype results pipeline built *around* TruffleHog. A Python 3.12 / FastAPI backend runs the `trufflehog` binary as a subprocess, streams its output — one JSON object per line — into a local SQLite database while the scan is still running, and serves the stored scans and findings to a React 18 + Vite frontend with four screens: Executive Summary, Engineering Triage, Repo Leaderboard and Finding Detail.
+
+TruffleHog itself is not modified: there is no fork, no vendored copy, and no new or altered CLI flags. The backend invokes the published binary with documented flags only.
+
+```bash
+trufflehog <source> <target> --json --no-update
+```
+
+The backend serves four routes:
+
+- `POST /api/scans` — start a scan of a target; returns the new scan id straight away, without waiting for the scan to finish
+- `GET /api/scans` — list every scan with its status, exit code and finding count
+- `GET /api/scans/{scan_id}/findings` — list the findings of one scan
+- `GET /api/findings` — list every finding across all scans
+
+A scan is `running` while its subprocess is alive, then `completed` when the subprocess exits 0 and `failed` for any other exit code; the code itself is recorded with the scan. Findings are inserted as they are printed, so progress is visible before a scan ends. The frontend polls these routes to follow it; there is no push or streaming channel.
+
+## Prerequisites
+
+The `trufflehog` binary must be on the PATH of the host running the backend. Install it through any of the channels in the Installation section above, then confirm it is reachable.
+
+```bash
+trufflehog --version
+```
+
+`git` 2.20 or newer must also be on PATH for `git`-source scans. If the binary is missing the backend still starts, but every `POST /api/scans` answers with HTTP 503 until it is installed. Setting `TRUFFLEHOG_BIN=/explicit/path/trufflehog` names an executable directly and bypasses the PATH lookup.
+
+The backend process must be started and left running, because scans are tracked inside it. Stopping it stops ingesting an in-flight scan, and the next start marks any scan left in `running` as `failed`. A `trufflehog` child that was already spawned is not signalled and may keep running until it exits on its own.
+
+## Running the backend
+
+From the repository root:
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r backend/requirements.txt
+cd backend && uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+The API is then at `http://127.0.0.1:8000/api/...` and FastAPI's interactive docs at `http://127.0.0.1:8000/docs`. As everywhere else in this README, a local repository is given to the `git` source with a `file://` prefix.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/scans \
+  -H 'content-type: application/json' \
+  -d '{"target": "file:///path/to/repo"}'
+```
+
+## Running the frontend
+
+From the repository root in a second terminal, with Node.js 22 LTS:
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Vite serves the app at `http://localhost:5173` and proxies every `/api/*` request to `http://127.0.0.1:8000`, so the browser talks to a single origin and no base URL has to be configured. `npm run build` writes a bundle to `frontend/dist/` (git-ignored); serving that build in production is out of scope for this prototype.
+
+## Stored data
+
+The database is created automatically on the backend's first start at `backend/trufflehog.db`, with the WAL sidecars `trufflehog.db-wal` and `trufflehog.db-shm` beside it while connections are open. All three are git-ignored. To reset all scan history, stop the backend and delete `backend/trufflehog.db`; the next start recreates the schema. `TRUFFLEHOG_DB_PATH` overrides the location — the tests use it to keep their data in a temporary file.
+
+## Secret hygiene
+
+- The stored finding JSON **excludes** the `Raw`, `RawV2` and `SecretParts` values, so no plaintext credential is persisted. Only the display-safe `Redacted` value is kept, and a mask derived from the raw value is stored in its place when a detector leaves `Redacted` empty. Everything else in the finding object is retained.
+- Credential-bearing targets are stored **redacted**: a target such as `https://user:token@host/org/repo.git` has its userinfo replaced with `***@` before the target is stored, logged or returned by the API. The original string is passed only to the subprocess.
+- TruffleHog's own stderr is drained so the scan process never blocks on a full pipe, but its content is never relayed to the backend's logs.
+
+## Tests
+
+The pytest suite lives in `backend/tests/` and runs from the `backend/` directory.
+
+```bash
+cd backend && python -m pytest tests -v --tb=short
+```
+
+Tests that need the `trufflehog` binary or `git` skip themselves when those are absent. The frontend has no automated tests; it is checked by manual review.
+
 # Use as a library
 
 Currently, trufflehog is in heavy development and no guarantees can be made on
