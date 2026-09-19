@@ -1,0 +1,186 @@
+/* Back link */
+.detail-back {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--color-link);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.detail-back:hover {
+  color: var(--color-text);
+}
+
+/* Card */
+.detail-card {
+  width: 100%;
+  max-width: var(--layout-detail-max);
+  margin-right: auto;
+  padding: var(--space-5);
+}
+
+.detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.detail-head > * {
+  min-width: 0;
+}
+
+.detail-head > :last-child {
+  flex-shrink: 0;
+}
+
+.detail-title {
+  color: var(--color-text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+}
+
+.detail-subtitle {
+  margin-top: var(--space-1);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: break-word;
+}
+
+/* Triage state beside the badge */
+.detail-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.detail-state {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+/* Meta grid */
+.detail-meta {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  row-gap: var(--space-4);
+  column-gap: var(--space-4);
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-5);
+}
+
+.detail-meta > * {
+  min-width: 0;
+}
+
+.detail-meta-label {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+/* Values are paths, commits, dates and names, clamped to two lines so the grid rows stay even. */
+.detail-meta-value {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  margin-top: var(--space-1);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Snippet */
+.detail-snippet {
+  margin: var(--space-1) 0 var(--space-5);
+  padding: var(--space-3);
+  background: var(--color-surface-alt);
+  border-left: var(--space-1) solid var(--color-verified);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.detail-snippet code {
+  font: inherit;
+}
+
+/* Remediation */
+.detail-remediation {
+  margin-top: var(--space-4);
+  margin-bottom: var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+
+/* Actions */
+.detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.detail-actions-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.detail-action[aria-pressed="true"] {
+  background: var(--color-bg);
+  border-color: var(--color-link);
+  color: var(--color-text);
+}
+
+.detail-assignee {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+/* Footer */
+.detail-footer {
+  max-width: var(--layout-detail-max);
+  color: var(--color-text-muted);
+  font-size: var(--text-md);
+}
+
+.detail-footer-note {
+  display: inline;
+  margin-left: var(--space-1);
+  color: var(--color-text-muted);
+}
+
+/* Empty state */
+.detail-empty {
+  max-width: var(--layout-detail-max);
+  color: var(--color-text-muted);
+  font-size: var(--text-md);
+}

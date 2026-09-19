@@ -1,0 +1,50 @@
+:root {
+  /* Colour */
+  --color-bg: #1b1a33;
+  --color-sidebar: #1e1d3a;
+  --color-surface: #262552;
+  --color-surface-alt: #2f2e5e;
+  --color-border: #3b3a66;
+  --color-text: #f3f3fa;
+  --color-text-muted: #9d9cc2;
+  --color-text-dim: #6f6e98;
+  --color-verified: #d4535f;
+  --color-unverified: #d3a747;
+  --color-low: #4a4978;
+  --color-link: #c8c7ea;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Type */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 14px;
+  --text-lg: 18px;
+  --text-xl: 28px;
+  --text-2xl: 36px;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+
+  /* Layout */
+  --layout-sidebar: 230px;
+  --layout-header: 64px;
+  --layout-content-max: 1240px;
+  --layout-detail-max: 820px;
+  --row-height-sm: 48px;
+  --row-height-lg: 60px;
+  --chart-height: 160px;
+}

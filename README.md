@@ -890,6 +890,136 @@ We no longer accept contributions to TruffleHog v2, but that code is available i
 
 We have published some [documentation and tooling to get started on adding new secret detectors](hack/docs/Adding_Detectors_external.md). Let's improve detection together!
 
+# :bar_chart: Results Pipeline (prototype)
+
+The `backend/` and `frontend/` directories hold a prototype results pipeline built *around* TruffleHog. A Python 3.12 / FastAPI backend runs the `trufflehog` binary as a subprocess, streams its output — one JSON object per line — into a local SQLite database while the scan is still running, and serves the stored scans and findings to a React 18 + Vite frontend with four screens: Executive Summary, Engineering Triage, Repo Leaderboard and Finding Detail.
+
+TruffleHog itself is not modified: there is no fork, no vendored copy, and no new or altered CLI flags. The backend invokes the published binary with documented flags only.
+
+```bash
+trufflehog git --json --no-update -- file:///path/to/repo
+```
+
+That line is the whole contract: every scan the backend starts is the six-argument list `[binary, source, "--json", "--no-update", "--", target]`, in that order. Only two arguments vary: the source subcommand, either `git` or `filesystem`, and that subcommand's target — a repository URI for `git`, a path for `filesystem`. A local repository must be given to the `git` source with a `file://` prefix, as above. `--json` and `--no-update` are always passed, and the target is always last, behind the `--` terminator, so a target that begins with `-` or `@` is scanned as a literal target instead of being read as an option or as a file of arguments. Nothing is passed through a shell, and the list is never assembled by string interpolation.
+
+The backend serves four routes:
+
+- `POST /api/scans` — start a scan of a target, a non-empty string of at most 2048 characters; returns the new scan id straight away, without waiting for the scan to finish. A body the request model rejects — an empty or over-long target, an unknown source, or any value the JSON parser cannot read as text — answers HTTP 422 with a `detail` list naming the offending field, and stores nothing
+- `GET /api/scans` — list every scan with its status, exit code and finding count
+- `GET /api/scans/{scan_id}/findings` — list the findings of one scan
+- `GET /api/findings` — list every finding across all scans
+
+A scan is `running` while its subprocess is alive, then `completed` when the subprocess exits 0 and `failed` for any other exit code; the return code itself is recorded with the scan whenever one is available. It is `null` in the three cases where no code was ever reported: the subprocess could not be spawned at all, the worker stopped before the scan finished, or the backend was restarted while the scan was still `running`. A `null` code alongside `failed` therefore means the scan never finished, as distinct from a real non-zero exit. Findings are inserted as they are printed, so progress is visible before a scan ends. The frontend polls these routes to follow it; there is no push or streaming channel.
+
+## Prerequisites
+
+The `trufflehog` binary must be on the PATH of the host running the backend. Use one of the channels in the Installation section above that leaves an executable on the host: MacOS users (Homebrew), Binary releases, Compile from source, or Using installation script. The Docker examples in that section run the scanner inside a container and install no host executable, so they do not satisfy this prerequisite. Once installed, confirm the binary is reachable.
+
+```bash
+trufflehog --version
+```
+
+`git` must also be on PATH for `git`-source scans, at 2.20 or newer within the 2.x series (`>=2.20.0,<3.0.0`) — the scanner rejects anything outside that range, including 3.x. If the `trufflehog` binary is missing the backend still starts, but every valid `POST /api/scans` answers with HTTP 503 until it is installed; the check runs after request validation, so a malformed body still gets the usual HTTP 422. Setting `TRUFFLEHOG_BIN=/explicit/path/trufflehog` names an executable directly and bypasses the PATH lookup.
+
+The backend process must be started and left running, because scans are tracked inside it. Stopping it stops ingesting an in-flight scan, and the next start marks any scan left in `running` as `failed`. A `trufflehog` child that was already spawned is not signalled and may keep running until it exits on its own.
+
+## Running the backend
+
+From the repository root:
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r backend/requirements.txt
+cd backend && uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+The API is then at `http://127.0.0.1:8000/api/...` and FastAPI's interactive docs at `http://127.0.0.1:8000/docs`. As everywhere else in this README, a local repository is given to the `git` source with a `file://` prefix.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/scans \
+  -H 'content-type: application/json' \
+  -d '{"target": "file:///path/to/repo"}'
+```
+
+## Running the frontend
+
+From the repository root in a second terminal, with Node.js 22 LTS:
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Vite serves the app at `http://localhost:5173` and proxies every `/api/*` request to `http://127.0.0.1:8000`, so the browser talks to a single origin and no base URL has to be configured. `npm run build` writes a bundle to `frontend/dist/` (git-ignored); serving that build in production is out of scope for this prototype.
+
+## Stored data
+
+The database is created automatically on the backend's first start at `backend/trufflehog.db`, with the WAL sidecars `trufflehog.db-wal` and `trufflehog.db-shm` beside it while connections are open. All three are git-ignored. To reset all scan history, stop the backend and delete `backend/trufflehog.db`; the next start recreates the schema. `TRUFFLEHOG_DB_PATH` overrides the location — the tests use it to keep their data in a temporary file.
+
+## Secret hygiene
+
+- The stored finding JSON **excludes** the `Raw`, `RawV2` and `SecretParts` values, so no plaintext credential is persisted. Only the display-safe `Redacted` value is kept, and a mask derived from the raw value is stored in its place when a detector leaves `Redacted` empty. Everything else in the finding object is retained.
+- Credential-bearing targets are stored **redacted**: a target such as `https://user:token@host/org/repo.git` has its userinfo replaced with `***@` before the target is stored, logged or returned by the API. The original string is passed only to the subprocess. When no authority can be parsed out of the target — a malformed URL such as `https://user:token@[bad/repo.git`, or an scp-style `user:token@host:path` — every `user:password@` sequence in it is masked instead, so no spelling of a broken URL carries a credential into the database, the API response or the log. An scp-style target holding no password, such as `git@github.com:org/repo.git`, is left as submitted. The logged command line is escaped argument by argument, so control characters in a target cannot forge a log record.
+- TruffleHog's own stderr is drained so the scan process never blocks on a full pipe, but its content is never relayed to the backend's logs.
+
+## Tests
+
+The pytest suite lives in `backend/tests/` and runs from the `backend/` directory.
+
+```bash
+cd backend && python -m pytest tests -v --tb=short
+```
+
+Tests that need the `trufflehog` binary or `git` skip themselves when those are absent. The frontend has no automated tests; it is checked by manual review.
+
+## Accepted deviations from the original design
+
+Several exact shapes fixed by the design this prototype was written from are not the shapes the code delivers. Each difference was examined in review and accepted as it stands rather than reverted, because reverting it would remove a security control or drop test coverage. They are recorded here so that the counts read as deliberate rather than as drift.
+
+- **The scan command puts both flags before a `--` terminator and the target last.** The list the backend builds is `[binary, source, "--json", "--no-update", "--", target]` — six arguments, as shown at the top of this section — where the original design specified the five-argument `[binary, source, target, "--json", "--no-update"]`, with the target immediately after the subcommand. The six-argument form above is the contract: it is what the code builds, what the test suite pins, and what this README documents, and the five-argument order it replaces is not built anywhere. The terminator is what keeps a target beginning with `-` or `@` a target, instead of letting it be read as an option or as a file of arguments. Submitting `--fail` as a target shows the difference: behind the terminator the scanner rejects it as a URI and exits 1, so the scan is recorded `failed`, while under the five-argument order the same string is consumed as a flag — `trufflehog git --fail --json --no-update` stops at `required argument 'uri' not provided`, and because the `filesystem` source's path argument is optional, `trufflehog filesystem --no-verification --json --no-update` accepts the injected flag, scans nothing and exits 0, which this pipeline would then record as a `completed` scan with no findings. Both flags the list does pass are documented options of the published binary, so the scanner is still consumed exactly as shipped.
+- **`backend/scanner.py` defines twelve top-level names rather than ten.** The two beyond the original list, `command_log_line` and `_mask_credential_runs`, implement the hygiene guarantees above: escaping the logged command line argument by argument, and masking a target whose authority cannot be parsed at all. Folding them into their callers would inline both controls and remove the escaping helper's own unit test.
+- **`frontend/src/format.js` exports thirteen helpers rather than nine.** `detectorLabel`, `fileLabel`, `redactedLabel` and `formatCount` were duplicated verbatim in two or more screens; that module is where a helper used by more than one screen belongs, so removing the duplication raised the count. The module also holds one helper it does not export, `displaySafe`, which every one of those display helpers runs its value through: it replaces Unicode bidi controls (`U+202A`–`U+202E`, `U+2066`–`U+2069`, `U+200E`, `U+200F`, `U+061C`) and the other invisible control and separator characters with `U+FFFD`, one character for one, so a repository or file name carrying a right-to-left override cannot transpose what a screen paints — neither in a text node nor in a `title` tooltip, which can carry no markup. Screens then render each scanner-supplied value inside a `<bdi>` element, which `frontend/src/styles/base.css` isolates at a fixed left-to-right base direction, so a value can no longer reorder the text the screen puts around it.
+- **`POST /api/scans` bounds its target, and the app renders its own rejection body.** The original design specified `target: str = Field(min_length=1)` — a non-empty string and nothing more — with FastAPI's default 422 for every invalid body. The model now also carries `max_length=2048`, and `backend/main.py` registers a `RequestValidationError` handler that rebuilds the same `{"detail": [ … ]}` list FastAPI would have sent, with every string escaped to characters UTF-8 can encode. Without the bound, one unauthenticated request stored a 5,000,000-character target and every later `GET /api/scans` poll carried it — megabytes on a two-second poll — until the database file was deleted; 2048 characters sit far above any real git URI or filesystem path, and they also keep the argument-list limit the scan subprocess would otherwise hit out of reach. Without the handler, a lone UTF-16 surrogate anywhere the request model reads — `{"target": "file:///tmp/\ud800bad"}` — made the default handler echo that unencodable input into the error body, `JSONResponse.render()` raised `UnicodeEncodeError` while encoding it, and the reply degraded to a bare `500 Internal Server Error` instead of the documented 422. A rejected request still stores nothing and still logs nothing of the input it rejected.
+- **The suite collects sixty-six tests rather than thirteen.** All thirteen originally named tests are present, and they are exactly the set that remains once the later tests are deselected. The other fifty-three were added afterwards, each pinning one fix: worker finalization and its terminal update, the compensation applied when a worker thread cannot start, the two stderr-drain outcomes, finding visibility while a scan is still running, a flag-shaped target kept positional, credential redaction for every malformed spelling of a target and in every sink it reaches, the escaping of control characters in the logged command line, the 422 for a body carrying a lone UTF-16 surrogate, the rejection of a target past the length bound, the absence from this backend of every starlette surface the advisories below need, a form-encoded body reaching the request model instead of a form parser, a trailing-slash path answered without a URL rebuilt from the request, and the agreement between the two dependency pins and the record kept of them.
+
+Every test runs by default. The fifty-three later tests carry a `regression` marker, so either inventory can be listed on its own: the first command below prints `12` and the second `13`, and the last two report 13 and 53 collected tests.
+
+```bash
+grep -cE '^(def|class) ' backend/scanner.py
+grep -c '^export function ' frontend/src/format.js
+(cd backend && python -m pytest tests --collect-only -q -m "not regression")
+(cd backend && python -m pytest tests --collect-only -q -m regression)
+```
+
+## Dependency advisories on the pinned stack
+
+This prototype is pinned to FastAPI 0.115, and `starlette` is pinned alongside it as `starlette==0.46.2` in `backend/requirements.txt` — the ceiling of the `>=0.40.0,<0.47.0` range every 0.115 release accepts. Seven published starlette advisories apply to that release and the lowest of them is fixed in 0.47.2, above the ceiling, so an audit of the declared set reports all seven and exits non-zero. That non-zero exit is the expected result here, not a new problem:
+
+```bash
+pip-audit -r backend/requirements.txt
+```
+
+The pin is not moved to silence it. Every one of the fifteen 0.115 releases caps starlette below the lowest fix, so no spelling of this pinned stack can be audit-clean: asking for `fastapi~=0.115.0` together with `starlette>=0.47.2` gives pip a `ResolutionImpossible` naming all fifteen. Clearing the seven means moving the stack pin itself, which is a decision for whoever owns that pin rather than something this code changes on its own, so the seven are carried deliberately and the analysis behind carrying them is written out below.
+
+The explicit `starlette` pin stays because it makes the installed version, and so the audit result, identical on every host. Left to FastAPI's own resolution, a host that already carries an older starlette from inside the accepted range keeps it: in a virtual environment pre-seeded with `starlette==0.41.0`, `pip install -r backend/requirements.txt` finished successfully and left 0.41.0 in place, with `pip check` reporting nothing broken. All fourteen starlette releases inside that range carry the same seven advisories, so the pin hardens installation rather than clearing anything.
+
+None of the seven has a code path in this backend. Each one needs a starlette entry point that nothing here uses:
+
+| Advisory | Also known as | Fixed in | The starlette surface it needs | Why that surface is absent here |
+|---|---|---|---|---|
+| PYSEC-2026-1941 | CVE-2025-54121 | 0.47.2 | a multipart body large enough to spool to disk | no route declares a form or file field, and the multipart parser is not installed |
+| PYSEC-2026-1942 | CVE-2025-62727 | 0.49.1 | a `FileResponse`, usually behind `StaticFiles`, plus a `Range` header | nothing is served from disk; every route answers JSON, beside the two generated documentation pages |
+| PYSEC-2026-161 | CVE-2026-48710 | 1.0.1 | a reply whose URL is rebuilt from the request, carrying the client's `Host` into it | no handler reads the request URL, and slash redirection is off (see below) |
+| PYSEC-2026-2280 | CVE-2026-48817 | 1.1.0 | a route written as an `HTTPEndpoint` class | every route is a plain function |
+| PYSEC-2026-2281 | CVE-2026-48818 | 1.1.0 | `StaticFiles` serving a Windows UNC path | no static files are mounted |
+| PYSEC-2026-248 | CVE-2026-54282 | 1.3.0 | a reply whose URL is rebuilt from the request path | as for CVE-2026-48710 above |
+| PYSEC-2026-249 | CVE-2026-54283 | 1.3.1 | a url-encoded form body | the only body any route reads is JSON, through the request model |
+
+One path did reach that last surface, and it is now closed. A trailing-slash spelling of a route used to be answered with a redirect whose target starlette rebuilt from the request, so a client's own `Host` header came back in the `Location`: with the backend running, `curl -sI -H 'Host: evil.example' http://127.0.0.1:8000/api/scans/` answered `307` with `Location: http://evil.example/api/scans`, and `/api/findings/`, `/api/scans/1/findings/` and `/docs/` behaved the same way. The app is now built with slash redirection off, so each of those is a plain `404` with no `Location` and nothing rebuilt from the request. No route, documentation page or screen changes: nothing in this pipeline ever asks for a trailing-slash spelling.
+
+What would put these advisories back within reach is the right-hand column of that table: mounting `StaticFiles`, returning a `FileResponse`, adding a form or upload field, writing a route as an `HTTPEndpoint` class, reading the request URL in a handler, or turning slash redirection back on. The test suite fails if any of those appears in the backend, if the two pins drift from the versions actually installed, or if this record stops naming an advisory the audit reports — so the pin and the record move together or not at all. Beyond that, the backend binds `127.0.0.1` and the whole prototype is a localhost tool.
+
+Moving the stack pin is what clears them, and the steps are measured rather than guessed: `fastapi>=0.116.2` admits starlette 0.48.0 and clears CVE-2025-54121; `fastapi>=0.121` admits 0.49.3 and also clears CVE-2025-62727, the one rated high; `fastapi>=0.133` admits the starlette 1.x line and clears all seven. Each step changes the pinned stack, so it belongs to whoever owns that pin, and it is followed by a run of the test suite and a re-check of the four routes and the rejected-request body.
+
 # Use as a library
 
 Currently, trufflehog is in heavy development and no guarantees can be made on
