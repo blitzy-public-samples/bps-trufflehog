@@ -169,6 +169,7 @@ function TriageRowContent({ finding, scansById, entry, onTriage, onSelectFinding
   const triageLabel = TRIAGE_LABELS[entry?.state];
   const commit = shortCommit(finding.commit_hash);
   const file = fileLabel(finding);
+  const repo = shortRepo(repoKey(finding, scansById));
   const openFinding = () => onSelectFinding(finding.id);
   const rowLabel = rowDescription(finding, scansById);
   const assigneeId = `triage-assignee-${finding.id}`;
@@ -201,8 +202,8 @@ function TriageRowContent({ finding, scansById, entry, onTriage, onSelectFinding
           </span>
         </button>
       </td>
-      <td className="triage-repo">
-        <bdi>{shortRepo(repoKey(finding, scansById))}</bdi>
+      <td className="triage-repo" title={repo === PLACEHOLDER ? undefined : repo}>
+        <bdi>{repo}</bdi>
       </td>
       <td>
         <button
@@ -252,16 +253,18 @@ function TriageRowContent({ finding, scansById, entry, onTriage, onSelectFinding
         <div className="triage-actions">
           <button
             type="button"
-            className="btn"
+            className="btn triage-action"
             aria-label={`Resolve ${rowLabel}`}
+            aria-pressed={entry?.state === "resolved"}
             onClick={() => onTriage(finding.id, { state: "resolved" })}
           >
             Resolve
           </button>
           <button
             type="button"
-            className="btn"
+            className="btn triage-action"
             aria-label={`Ignore ${rowLabel}`}
+            aria-pressed={entry?.state === "ignored"}
             onClick={() => onTriage(finding.id, { state: "ignored" })}
           >
             Ignore

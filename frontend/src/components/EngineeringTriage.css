@@ -237,6 +237,13 @@
   white-space: nowrap;
 }
 
+/* Pressed treatment for the row's triage actions, matching the detail card's. */
+.triage-action[aria-pressed="true"] {
+  background: var(--color-bg);
+  border-color: var(--color-link);
+  color: var(--color-text);
+}
+
 .triage-empty,
 .triage-table-card td.triage-empty {
   padding: var(--space-6) var(--space-5);

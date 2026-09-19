@@ -293,10 +293,8 @@ bdi {
   background: var(--color-surface);
 }
 
+/* The header row scrolls with the page: the table card is the horizontal scroll container. */
 .table thead {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   background: var(--color-surface-alt);
 }
 

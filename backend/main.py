@@ -31,7 +31,10 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="TruffleHog Results Pipeline", lifespan=lifespan)
+# Slash redirection off: a trailing-slash variant of a route is answered 404 rather than with a
+# redirect whose target is rebuilt from the request, which would carry the client's own Host header
+# into the Location of a reply this app never needs to send.
+app = FastAPI(title="TruffleHog Results Pipeline", lifespan=lifespan, redirect_slashes=False)
 app.add_middleware(GZipMiddleware, minimum_size=GZIP_MINIMUM_SIZE, compresslevel=GZIP_LEVEL)
 
 

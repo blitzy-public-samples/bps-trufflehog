@@ -6,9 +6,15 @@ import shutil
 import sys
 import threading
 import time
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.params import Form
+from starlette.responses import FileResponse
+from starlette.routing import Mount
+from starlette.staticfiles import StaticFiles
 
 import db
 import main
@@ -1030,4 +1036,142 @@ def test_a_stored_scan_id_still_serves_its_findings(client):
 
     assert response.status_code == 200, response.text
     assert response.json() == []
+
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+REQUIREMENTS_PATH = BACKEND_DIR / "requirements.txt"
+README_PATH = BACKEND_DIR.parent / "README.md"
+
+# The starlette entry points the advisories this stack carries need before any of them can be run.
+ADVISORY_AFFECTED_SURFACES = (
+    "StaticFiles",
+    "FileResponse",
+    "HTTPEndpoint",
+    "UploadFile",
+    "request.form",
+    "request.url",
+    "Form(",
+    "File(",
+)
+
+# Each advisory the audit reports against the pinned starlette, with its alias and fixing release.
+RECORDED_ADVISORIES = (
+    ("PYSEC-2026-1941", "CVE-2025-54121", "0.47.2"),
+    ("PYSEC-2026-1942", "CVE-2025-62727", "0.49.1"),
+    ("PYSEC-2026-161", "CVE-2026-48710", "1.0.1"),
+    ("PYSEC-2026-2280", "CVE-2026-48817", "1.1.0"),
+    ("PYSEC-2026-2281", "CVE-2026-48818", "1.1.0"),
+    ("PYSEC-2026-248", "CVE-2026-54282", "1.3.0"),
+    ("PYSEC-2026-249", "CVE-2026-54283", "1.3.1"),
+)
+DECLARED_PINS = (("fastapi", "~=0.115.0"), ("starlette", "==0.46.2"))
+AUDIT_COMMAND = "pip-audit -r backend/requirements.txt"
+
+SPECIFIER_MARKS = ("~=", "==", ">=", "<=", "!=", ">", "<", "[")
+HOSTILE_HOST = "evil.example"
+SERVED_PATHS = ("/api/scans", "/api/findings", "/docs", "/openapi.json")
+TRAILING_SLASH_PATHS = ("/api/scans/", "/api/findings/", "/api/scans/1/findings/", "/docs/")
+
+
+def _declared_requirements() -> dict[str, str]:
+    """Returns the version specifier the requirements file declares for each distribution, keyed by
+    name with any extras removed."""
+    declared = {}
+    for line in REQUIREMENTS_PATH.read_text(encoding="utf-8").splitlines():
+        entry = line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        cut = min((entry.find(mark) for mark in SPECIFIER_MARKS if mark in entry), default=len(entry))
+        remainder = entry[cut:]
+        if remainder.startswith("["):
+            remainder = remainder[remainder.index("]") + 1 :]
+        declared[entry[:cut]] = remainder
+    return declared
+
+
+@pytest.mark.regression
+def test_the_backend_declares_no_advisory_affected_starlette_surface(client):
+    """Checks no backend module names a starlette surface the recorded advisories need, and that the
+    running app mounts no static files, returns no file response, declares no form body and adds no
+    middleware beyond compression."""
+    modules = sorted(BACKEND_DIR.glob("*.py"))
+    assert modules, f"no module was found to read under {BACKEND_DIR}"
+    for module in modules:
+        text = module.read_text(encoding="utf-8")
+        for surface in ADVISORY_AFFECTED_SURFACES:
+            assert surface not in text, f"{module.name} names {surface}"
+
+    for route in client.app.routes:
+        path = getattr(route, "path", route)
+        assert not isinstance(route, Mount), f"{path} is a mount"
+        assert not isinstance(getattr(route, "app", None), StaticFiles), f"{path} serves static files"
+        declared_class = getattr(route, "response_class", None)
+        response_class = getattr(declared_class, "value", declared_class)
+        assert not (isinstance(response_class, type) and issubclass(response_class, FileResponse)), (
+            f"{path} answers with {response_class}"
+        )
+        body_field = getattr(route, "body_field", None)
+        assert body_field is None or not isinstance(body_field.field_info, Form), (
+            f"{path} declares a form body"
+        )
+
+    assert [entry.cls for entry in client.app.user_middleware] == [GZipMiddleware]
+
+
+@pytest.mark.regression
+def test_a_form_encoded_body_is_read_by_the_request_model(client, monkeypatch):
+    """Posts a url-encoded body and a multipart body and checks each is rejected by the request
+    model instead of reaching a form parser, leaving no scan row behind."""
+    monkeypatch.setenv("TRUFFLEHOG_BIN", sys.executable)
+    before = _scan_ids(client)
+
+    responses = (
+        client.post("/api/scans", data={"target": "file:///tmp/form"}),
+        client.post("/api/scans", files={"upload": ("target.txt", b"file:///tmp/form")}),
+    )
+
+    for response in responses:
+        assert response.status_code == VALIDATION_STATUS, response.text[:ERROR_TEXT_LIMIT]
+        locations = [error["loc"] for error in _validation_errors(response)]
+        assert locations == [["body"]], locations
+    assert _scan_ids(client) == before, "a form-encoded body must not create a scan row"
+
+
+@pytest.mark.regression
+def test_a_trailing_slash_path_is_not_answered_with_a_rebuilt_url(client):
+    """Requests the trailing-slash variant of every route under a hostile Host header and checks
+    each answers a plain 404 carrying no Location, while the routes themselves still answer."""
+    assert client.app.router.redirect_slashes is False
+
+    for path in TRAILING_SLASH_PATHS:
+        response = client.get(path, headers={"Host": HOSTILE_HOST}, follow_redirects=False)
+
+        assert response.status_code == 404, f"{path} answered {response.status_code}"
+        pointed_at = response.headers.get("location")
+        assert pointed_at is None, f"{path} pointed at {pointed_at}"
+        assert HOSTILE_HOST not in response.text, f"{path} echoed the request host"
+
+    for path in SERVED_PATHS:
+        response = client.get(path, headers={"Host": HOSTILE_HOST}, follow_redirects=False)
+
+        assert response.status_code == 200, f"{path} answered {response.status_code}"
+
+
+@pytest.mark.regression
+def test_the_pinned_stack_and_the_recorded_advisories_agree():
+    """Checks the declared pins match the installed distributions and that the documented record
+    names every advisory the audit reports against them, so neither can drift alone."""
+    declared = _declared_requirements()
+    for name, specifier in DECLARED_PINS:
+        assert declared.get(name) == specifier, declared
+
+    assert version("fastapi").startswith("0.115."), version("fastapi")
+    assert version("starlette") == declared["starlette"].removeprefix("=="), version("starlette")
+
+    record = README_PATH.read_text(encoding="utf-8")
+    assert AUDIT_COMMAND in record, f"{README_PATH.name} does not print the audit command"
+    for advisory, alias, fix in RECORDED_ADVISORIES:
+        assert advisory in record, f"{README_PATH.name} does not record {advisory}"
+        assert alias in record, f"{README_PATH.name} does not record {alias}"
+        assert fix in record, f"{README_PATH.name} does not record the {advisory} fix {fix}"
 
