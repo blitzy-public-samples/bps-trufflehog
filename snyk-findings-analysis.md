@@ -30,14 +30,14 @@ The 12 true positives are 11 server-side request forgery results, in the ngrok a
 
 ### Severity mapping
 
-Severity follows Snyk's own mapping of SARIF levels, documented in [View Snyk Code CLI results](https://docs.snyk.io/developer-tools/snyk-cli/scan-and-maintain-projects-using-the-cli/snyk-cli-for-snyk-code/view-snyk-code-cli-results), section "Severity levels in JSON and SARIF files". Snyk Code does not use Critical, so that bucket is always empty.
+Severity follows Snyk's own mapping of SARIF levels, documented in [View Snyk Code CLI results](https://docs.snyk.io/developer-tools/snyk-cli/scan-and-maintain-projects-using-the-cli/snyk-cli-for-snyk-code/view-snyk-code-cli-results), section "Severity levels in JSON and SARIF files". Snyk Code does not use Critical, so no SARIF level maps to it and the bucket is always empty. SARIF 2.1.0 also defines the level `none`, which no result in `results.sarif` carries.
 
 | SARIF level | Report severity | Results |
 | --- | --- | --- |
 | `error` | High | 9: #0, #35–#42 |
 | `warning` | Medium | 13: #53–#65 |
 | `note` | Low | 62: all others |
-| none | Critical | 0 |
+| — (no level maps to Critical) | Critical | 0 |
 
 Each finding takes its severity from its own `results[i].level`, because SARIF 2.1.0 lets a result's level override the rule's `defaultConfiguration.level`: `go/PT` defaults to `note`, yet results #35–#42 carry `error`. The `priorityScore` property is not a severity input.
 
@@ -73,7 +73,7 @@ Each entry names the clause that decided its verdict:
 | `go/HardcodedNonCryptoSecret/test` | Hardcoded Non-Cryptographic Secret | CWE-547 Use of Hard-coded, Security-relevant Constants | 3 |
 | `python/HardcodedNonCryptoSecret/test` | Hardcoded Non-Cryptographic Secret | CWE-547 Use of Hard-coded, Security-relevant Constants | 1 |
 
-Names are the SARIF `shortDescription` of each rule; the SARIF also carries Snyk's full rule text in `help.markdown`. Snyk's public rule tables, [Snyk Code Go rules](https://docs.snyk.io/scan-fix-and-prevent/scan-with-snyk/snyk-code/snyk-code-security-rules/go-rules) and [Snyk Code Python rules](https://docs.snyk.io/scan-fix-and-prevent/scan-with-snyk/snyk-code/snyk-code-security-rules/python-rules), list the same rules by name and CWE but have no page per rule ID and no `/test` variants.
+Names are the SARIF `shortDescription` of each rule; the SARIF also carries Snyk's full rule text in `help.markdown`. Snyk's public rule tables, [Snyk Code Go rules](https://docs.snyk.io/scan-fix-and-prevent/scan-with-snyk/snyk-code/snyk-code-security-rules/go-rules) and [Snyk Code Python rules](https://docs.snyk.io/scan-fix-and-prevent/scan-with-snyk/snyk-code/snyk-code-security-rules/python-rules), list rules by name and CWE only, with no rule IDs and no `/test` variants, so each rule here corresponds to a table row by weakness and CWE. Two public names differ from the SARIF names: the Go table calls the CWE-295 rule `go/TooPermissiveTrustManager` "Improper Certificate Validation", and both tables call the CWE-547 rules `go/HardcodedNonCryptoSecret/test` and `python/HardcodedNonCryptoSecret/test` "Hardcoded Secret". The table above keeps the SARIF names.
 
 ## Critical
 
@@ -104,7 +104,7 @@ None.
   Only the operator controls `argv[0]`, `PATH` and the wizard input, and the operator can already run any program, so the CWE-78 premise of untrusted data reaching a shell command does not hold. Criterion: false positive, trusted-source and not-the-weakness clauses.
 - **SARIF reference:** `runs[0].results[0]`, identity `e1e44413-9392-44bb-ac52-181a39169fe3`
 
-Results #35–#42 follow one value: the repository URI the operator passes to `trufflehog git` (`main.go:101`), which reaches `PrepareRepo` through `Source.Init` and `prepareRepoSinceCommit` (`pkg/sources/git/git.go:194-195`, `pkg/sources/git/git.go:1482`) and is normalised by `normalizeFileURI` (`pkg/sources/git/git.go:445-470`). Snyk calls it input from "the request URL", but it is the path of a local `file://` repository and no HTTP request is involved; the binary's only HTTP listener is the opt-in `--profile` pprof server on port 18066 (`main.go:53`, `main.go:496-508`), which handles no scan input.
+Results #35–#42 follow one value: the repository URI the operator passes to `trufflehog git` (`main.go:101`), which reaches `PrepareRepo` through `Source.Init` and `prepareRepoSinceCommit` (`pkg/sources/git/git.go:194-195`, `pkg/sources/git/git.go:1482`) and is normalised by `normalizeFileURI` (`pkg/sources/git/git.go:445-470`). Snyk calls it input from "the request URL", but it is the path of a local `file://` repository and no HTTP request is involved; the binary's only HTTP listener is the opt-in `--profile` pprof server on port 18066 (`main.go:53`, `main.go:496-508`), which handles no scan input. `PrepareRepo` isolates the repository by cloning it into a temporary directory unless local git configuration is trusted, and two operator-controlled settings turn that trust on: the `--trust-local-git-config` flag (`main.go:111`) and pre-commit-hook mode, which `main.go:896-902` switches on automatically when `isPreCommitHook` finds `PRE_COMMIT=1`, `HUSKY=1`, `TRUFFLEHOG_PRE_COMMIT=1` or a non-empty `HUSKY_GIT_PARAMS` in the operator's environment (`main.go:1385-1420`). `pkg/engine/git.go:30` forwards the setting, and the trusted branch (`pkg/sources/git/git.go:1569-1570`) scans the checkout in place, with its own git configuration, skipping the clone and the reads flagged below. The trust model treats the operator's flags and environment as trusted, so the verdicts stand.
 
 #### Result #35 — go/PT — pkg/sources/git/git.go:512
 
@@ -113,7 +113,7 @@ Results #35–#42 follow one value: the repository URI the operator passes to `t
 - **Location:** `pkg/sources/git/git.go:512` (call site; file read at `pkg/sources/git/git.go:1614`)
 - **Summary:** `CloneRepo` calls `executeClone` on this line. Snyk's flow for the local repository path passes through it and ends where `PrepareRepo` reads the source repository's `commondir` file.
 - **Verdict:** False positive
-- **Reasoning:** The flagged line `pkg/sources/git/git.go:512` reads no file; it clones into a directory that `createClonePath` has just made (`pkg/sources/git/git.go:507`, `pkg/sources/git/git.go:587-614`). The read happens at `pkg/sources/git/git.go:1614`. The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`) unless the operator passes `--trust-local-git-config` (`main.go:111`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
+- **Reasoning:** The flagged line `pkg/sources/git/git.go:512` reads no file; it clones into a directory that `createClonePath` has just made (`pkg/sources/git/git.go:507`, `pkg/sources/git/git.go:587-614`). The read happens at `pkg/sources/git/git.go:1614`. The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Two operator-controlled settings skip it: the `--trust-local-git-config` flag (`main.go:111`) and pre-commit-hook mode, which sets the same option from hook variables in the operator's environment (`main.go:896-902`); the trusted branch (`pkg/sources/git/git.go:1569-1570`) then skips both the clone and these reads. Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
 - **SARIF reference:** `runs[0].results[35]`, identity `ab90fda9-02af-4f4d-a1ce-912936fff971`
 
 #### Result #36 — go/PT — pkg/sources/git/git.go:757
@@ -123,7 +123,7 @@ Results #35–#42 follow one value: the repository URI the operator passes to `t
 - **Location:** `pkg/sources/git/git.go:757` (call site; file read at `pkg/sources/git/git.go:1614`)
 - **Summary:** `CloneRepoUsingToken` forwards its URL to `CloneRepo` on this line. Snyk's flow for the local repository path runs through the call on its way to the `commondir` read in `PrepareRepo`.
 - **Verdict:** False positive
-- **Reasoning:** `pkg/sources/git/git.go:755-757` is a wrapper for authenticated remote clones (called at `pkg/sources/git/git.go:318`); the local path that reaches the read at `pkg/sources/git/git.go:1614` goes through `CloneRepo` directly (`pkg/sources/git/git.go:1581`). The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`) unless the operator passes `--trust-local-git-config` (`main.go:111`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
+- **Reasoning:** `pkg/sources/git/git.go:755-757` is a wrapper for authenticated remote clones (called at `pkg/sources/git/git.go:318`); the local path that reaches the read at `pkg/sources/git/git.go:1614` goes through `CloneRepo` directly (`pkg/sources/git/git.go:1581`). The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Two operator-controlled settings skip it: the `--trust-local-git-config` flag (`main.go:111`) and pre-commit-hook mode, which sets the same option from hook variables in the operator's environment (`main.go:896-902`); the trusted branch (`pkg/sources/git/git.go:1569-1570`) then skips both the clone and these reads. Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
 - **SARIF reference:** `runs[0].results[36]`, identity `098895a0-074b-49b9-9cb4-78f5844c2f3b`
 
 #### Result #37 — go/PT — pkg/sources/git/git.go:762
@@ -133,7 +133,7 @@ Results #35–#42 follow one value: the repository URI the operator passes to `t
 - **Location:** `pkg/sources/git/git.go:762` (call site; file read at `pkg/sources/git/git.go:1614`)
 - **Summary:** `CloneRepoUsingUnauthenticated` forwards its URL to `CloneRepo` on this line. Snyk's flow for the local repository path runs through the call on its way to the `commondir` read in `PrepareRepo`.
 - **Verdict:** False positive
-- **Reasoning:** `pkg/sources/git/git.go:761-762` is a wrapper for unauthenticated remote clones (called at `pkg/sources/git/git.go:322`); the local path that reaches the read at `pkg/sources/git/git.go:1614` goes through `CloneRepo` directly (`pkg/sources/git/git.go:1581`). The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`) unless the operator passes `--trust-local-git-config` (`main.go:111`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
+- **Reasoning:** `pkg/sources/git/git.go:761-762` is a wrapper for unauthenticated remote clones (called at `pkg/sources/git/git.go:322`); the local path that reaches the read at `pkg/sources/git/git.go:1614` goes through `CloneRepo` directly (`pkg/sources/git/git.go:1581`). The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Two operator-controlled settings skip it: the `--trust-local-git-config` flag (`main.go:111`) and pre-commit-hook mode, which sets the same option from hook variables in the operator's environment (`main.go:896-902`); the trusted branch (`pkg/sources/git/git.go:1569-1570`) then skips both the clone and these reads. Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
 - **SARIF reference:** `runs[0].results[37]`, identity `473437e3-b6a9-4a76-b4ab-a4773d4b5195`
 
 #### Result #38 — go/PT — pkg/sources/git/git.go:768
@@ -143,7 +143,7 @@ Results #35–#42 follow one value: the repository URI the operator passes to `t
 - **Location:** `pkg/sources/git/git.go:768` (call site; file read at `pkg/sources/git/git.go:1614`)
 - **Summary:** The AWS CodeCommit branch of `CloneRepoUsingSSH` forwards its URL to `CloneRepo` on this line. Snyk's flow for the local repository path runs through the call on its way to the `commondir` read in `PrepareRepo`.
 - **Verdict:** False positive
-- **Reasoning:** `pkg/sources/git/git.go:766-768` serves SSH clones of CodeCommit URLs (called at `pkg/sources/git/git.go:326`); the local path that reaches the read at `pkg/sources/git/git.go:1614` goes through `CloneRepo` directly (`pkg/sources/git/git.go:1581`). The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`) unless the operator passes `--trust-local-git-config` (`main.go:111`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
+- **Reasoning:** `pkg/sources/git/git.go:766-768` serves SSH clones of CodeCommit URLs (called at `pkg/sources/git/git.go:326`); the local path that reaches the read at `pkg/sources/git/git.go:1614` goes through `CloneRepo` directly (`pkg/sources/git/git.go:1581`). The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Two operator-controlled settings skip it: the `--trust-local-git-config` flag (`main.go:111`) and pre-commit-hook mode, which sets the same option from hook variables in the operator's environment (`main.go:896-902`); the trusted branch (`pkg/sources/git/git.go:1569-1570`) then skips both the clone and these reads. Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
 - **SARIF reference:** `runs[0].results[38]`, identity `b90ec8d4-4a67-487b-aa81-0eacba0227e3`
 
 #### Result #39 — go/PT — pkg/sources/git/git.go:772
@@ -153,7 +153,7 @@ Results #35–#42 follow one value: the repository URI the operator passes to `t
 - **Location:** `pkg/sources/git/git.go:772` (call site; file read at `pkg/sources/git/git.go:1614`)
 - **Summary:** The default branch of `CloneRepoUsingSSH` forwards its URL to `CloneRepo` on this line. Snyk's flow for the local repository path runs through the call on its way to the `commondir` read in `PrepareRepo`.
 - **Verdict:** False positive
-- **Reasoning:** `pkg/sources/git/git.go:771-772` serves SSH clones as user `git` (called at `pkg/sources/git/git.go:326`); the local path that reaches the read at `pkg/sources/git/git.go:1614` goes through `CloneRepo` directly (`pkg/sources/git/git.go:1581`). The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`) unless the operator passes `--trust-local-git-config` (`main.go:111`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
+- **Reasoning:** `pkg/sources/git/git.go:771-772` serves SSH clones as user `git` (called at `pkg/sources/git/git.go:326`); the local path that reaches the read at `pkg/sources/git/git.go:1614` goes through `CloneRepo` directly (`pkg/sources/git/git.go:1581`). The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Two operator-controlled settings skip it: the `--trust-local-git-config` flag (`main.go:111`) and pre-commit-hook mode, which sets the same option from hook variables in the operator's environment (`main.go:896-902`); the trusted branch (`pkg/sources/git/git.go:1569-1570`) then skips both the clone and these reads. Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
 - **SARIF reference:** `runs[0].results[39]`, identity `17aed0ac-4155-4345-8585-bb5e09e60311`
 
 #### Result #40 — go/PT — pkg/sources/git/git.go:805
@@ -163,7 +163,7 @@ Results #35–#42 follow one value: the repository URI the operator passes to `t
 - **Location:** `pkg/sources/git/git.go:805`
 - **Summary:** `resolveGitDir` reads the `.git` entry of the operator's repository when it is a file, as in a git worktree, and follows its `gitdir:` pointer to the real git directory.
 - **Verdict:** False positive
-- **Reasoning:** `os.ReadFile` at `pkg/sources/git/git.go:805` reads `.git` under the repository path given to `resolveGitDir` (`pkg/sources/git/git.go:791-792`, called at `pkg/sources/git/git.go:1592`), and `pkg/sources/git/git.go:810-827` turns its `gitdir:` line into a cleaned path. The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`) unless the operator passes `--trust-local-git-config` (`main.go:111`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
+- **Reasoning:** `os.ReadFile` at `pkg/sources/git/git.go:805` reads `.git` under the repository path given to `resolveGitDir` (`pkg/sources/git/git.go:791-792`, called at `pkg/sources/git/git.go:1592`), and `pkg/sources/git/git.go:810-827` turns its `gitdir:` line into a cleaned path. The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Two operator-controlled settings skip it: the `--trust-local-git-config` flag (`main.go:111`) and pre-commit-hook mode, which sets the same option from hook variables in the operator's environment (`main.go:896-902`); the trusted branch (`pkg/sources/git/git.go:1569-1570`) then skips both the clone and these reads. Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
 - **SARIF reference:** `runs[0].results[40]`, identity `843181c9-010c-4648-8d55-17da1e481f8c`
 
 #### Result #41 — go/PT — pkg/sources/git/git.go:1600
@@ -173,7 +173,7 @@ Results #35–#42 follow one value: the repository URI the operator passes to `t
 - **Location:** `pkg/sources/git/git.go:1600`
 - **Summary:** `PrepareRepo` reads the index file of the operator's original repository so the temporary clone can see staged changes.
 - **Verdict:** False positive
-- **Reasoning:** `os.ReadFile` at `pkg/sources/git/git.go:1600` reads `index` from the git directory `resolveGitDir` returned (`pkg/sources/git/git.go:1592-1597`), and `pkg/sources/git/git.go:1604` writes it into the clone only. The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`) unless the operator passes `--trust-local-git-config` (`main.go:111`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
+- **Reasoning:** `os.ReadFile` at `pkg/sources/git/git.go:1600` reads `index` from the git directory `resolveGitDir` returned (`pkg/sources/git/git.go:1592-1597`), and `pkg/sources/git/git.go:1604` writes it into the clone only. The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Two operator-controlled settings skip it: the `--trust-local-git-config` flag (`main.go:111`) and pre-commit-hook mode, which sets the same option from hook variables in the operator's environment (`main.go:896-902`); the trusted branch (`pkg/sources/git/git.go:1569-1570`) then skips both the clone and these reads. Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
 - **SARIF reference:** `runs[0].results[41]`, identity `1363d6e8-7ec1-4bf6-b100-16c29e58da5c`
 
 #### Result #42 — go/PT — pkg/sources/git/git.go:1614
@@ -183,7 +183,7 @@ Results #35–#42 follow one value: the repository URI the operator passes to `t
 - **Location:** `pkg/sources/git/git.go:1614`
 - **Summary:** `PrepareRepo` reads the `commondir` file of the operator's original git directory to find the shared object store of a worktree.
 - **Verdict:** False positive
-- **Reasoning:** `os.ReadFile` at `pkg/sources/git/git.go:1614` reads `commondir` from the git directory `resolveGitDir` returned (`pkg/sources/git/git.go:1592`); the result only sets the alternates file of the temporary clone (`pkg/sources/git/git.go:1619-1623`). The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`) unless the operator passes `--trust-local-git-config` (`main.go:111`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
+- **Reasoning:** `os.ReadFile` at `pkg/sources/git/git.go:1614` reads `commondir` from the git directory `resolveGitDir` returned (`pkg/sources/git/git.go:1592`); the result only sets the alternates file of the temporary clone (`pkg/sources/git/git.go:1619-1623`). The path is the operator's `trufflehog git` argument (`main.go:101`), carried through `PrepareRepo` (`pkg/sources/git/git.go:1558`) to `uriPath` (`pkg/sources/git/git.go:1589`). An untrusted `file://` repository is first cloned into a fresh temporary directory (`pkg/sources/git/git.go:1572-1584`), and `TestGitConfigSecurityIsolation` covers that isolation (`pkg/sources/git/git_test.go:1015`). Two operator-controlled settings skip it: the `--trust-local-git-config` flag (`main.go:111`) and pre-commit-hook mode, which sets the same option from hook variables in the operator's environment (`main.go:896-902`); the trusted branch (`pkg/sources/git/git.go:1569-1570`) then skips both the clone and these reads. Residual: a `.git` file in an untrusted checkout can point these reads at another git directory on the host, as git itself would, but the reads run with the operator's permissions and feed only the operator's scan. Criterion: false positive, trusted-source clause.
 - **SARIF reference:** `runs[0].results[42]`, identity `89cee726-4673-453d-a0a5-b0c68c02e3ca`
 
 ### High — Needs manual review
@@ -369,7 +369,7 @@ Results #33 and #43–#52 are path-traversal results in developer tooling and te
 - **Location:** `pkg/analyzer/generate_permissions/generate_permissions.go:110`
 - **Summary:** The permissions code generator opens the YAML file named by its first command-line argument.
 - **Verdict:** False positive
-- **Reasoning:** `pkg/analyzer/generate_permissions/generate_permissions.go:110` calls `os.Open(os.Args[1])` in a `package main` program (`pkg/analyzer/generate_permissions/generate_permissions.go:1`) that is not linked into the `trufflehog` binary. It runs only through fixed `//go:generate` directives such as `pkg/analyzer/analyzers/sendgrid/sendgrid.go:1`, which pass a checked-in `permissions.yaml`, so the path comes from the developer running `go generate`, who can already read any file the generator could open. Criterion: false positive, trusted-source and test-data clauses.
+- **Reasoning:** `pkg/analyzer/generate_permissions/generate_permissions.go:110` calls `os.Open(os.Args[1])` in a `package main` program (`pkg/analyzer/generate_permissions/generate_permissions.go:1`) that is not linked into the `trufflehog` binary. The checked-in `//go:generate` directives, such as `pkg/analyzer/analyzers/sendgrid/sendgrid.go:1`, invoke it with a checked-in `permissions.yaml`; a developer can also run it directly, and then `main()` (`pkg/analyzer/generate_permissions/generate_permissions.go:108-110`) opens whatever path that developer passes. Either way the path comes from the developer, who can already read any file the generator could open. Criterion: false positive, trusted-source clause.
 - **SARIF reference:** `runs[0].results[33]`, identity `be040c65-4f32-4ff8-a5d2-6f4a1645cab6`
 
 Results #43–#52 flag cleanup calls in `pkg/sources/git/git_test.go`. Snyk starts each flow at `pkg/sources/git/git.go:1589`, but every path removed is one the test itself created from a hard-coded test input.
@@ -633,7 +633,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/HardcodedPassword/test` — Use of Hardcoded Passwords, CWE-798, CWE-259
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/detectors/docker/docker_auth_config_test.go:218`
-- **Summary:** A `Test_ParseAuth` case sets the password field to the placeholder `my_password`.
+- **Summary:** A `Test_ParseAuth` case sets the password field to an 11-character placeholder made of two lowercase words joined by an underscore.
 - **Verdict:** False positive
 - **Reasoning:** The placeholder at `pkg/detectors/docker/docker_auth_config_test.go:218` is only parsed by `parseBasicAuth` (`pkg/detectors/docker/docker_auth_config_test.go:256`), and the test case names no registry, so it authenticates to nothing. Criterion: false positive, test-data clause (placeholder).
 - **SARIF reference:** `runs[0].results[72]`, identity `4aea4810-785b-4b27-bf52-d81dce9c2154`
@@ -643,7 +643,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/HardcodedPassword/test` — Use of Hardcoded Passwords, CWE-798, CWE-259
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/detectors/docker/docker_auth_config_test.go:224`
-- **Summary:** The `Test_ParseAuth` case that combines an auth string with explicit fields uses the same `my_password` placeholder.
+- **Summary:** The `Test_ParseAuth` case that combines an auth string with explicit fields sets the password field to the same 11-character placeholder as #72.
 - **Verdict:** False positive
 - **Reasoning:** The placeholder at `pkg/detectors/docker/docker_auth_config_test.go:224` belongs to the case at `pkg/detectors/docker/docker_auth_config_test.go:221-225`, which is only parsed (`pkg/detectors/docker/docker_auth_config_test.go:256`) and names no registry. Criterion: false positive, test-data clause (placeholder).
 - **SARIF reference:** `runs[0].results[73]`, identity `8b7c28d3-15a6-4524-8ab4-3bb59596008a`
@@ -655,7 +655,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Location:** `pkg/detectors/jdbc/sqlserver_test.go:235`
 - **Summary:** A SQL Server connection-string test uses a 7-character password for a `localhost` database.
 - **Verdict:** False positive
-- **Reasoning:** The value at `pkg/detectors/jdbc/sqlserver_test.go:235` belongs to connection info for `localhost`, database `testdb` and user `sa` (`pkg/detectors/jdbc/sqlserver_test.go:231-235`), which the test only formats into a string and inspects (`pkg/detectors/jdbc/sqlserver_test.go:249-255`). Criterion: false positive, test-data clause.
+- **Reasoning:** The value at `pkg/detectors/jdbc/sqlserver_test.go:235` belongs to connection info for a test database on `localhost` with a two-letter administrator user name (`pkg/detectors/jdbc/sqlserver_test.go:231-235`), which the test only formats into a string and inspects (`pkg/detectors/jdbc/sqlserver_test.go:249-255`). Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[74]`, identity `3d38a666-9c6f-48f5-9acb-bef24bccb72c`
 
 #### Result #75 — go/HardcodedPassword/test — pkg/sources/gitlab/gitlab_integration_test.go:246
@@ -663,7 +663,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/HardcodedPassword/test` — Use of Hardcoded Passwords, CWE-798, CWE-259
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/gitlab/gitlab_integration_test.go:246`
-- **Summary:** The GitLab integration test's "basic auth did not authenticate" case uses the password `bad-password`.
+- **Summary:** The GitLab integration test's "basic auth did not authenticate" case uses a deliberately wrong 12-character hyphenated password.
 - **Verdict:** False positive
 - **Reasoning:** The value at `pkg/sources/gitlab/gitlab_integration_test.go:246` is a negative case that must fail (`pkg/sources/gitlab/gitlab_integration_test.go:241-250`); the real tokens come from the secret store (`pkg/sources/gitlab/gitlab_integration_test.go:231-232`), and the file builds only with the `integration` tag (`pkg/sources/gitlab/gitlab_integration_test.go:1`). Criterion: false positive, test-data clause (negative case).
 - **SARIF reference:** `runs[0].results[75]`, identity `0b57a5ac-e85e-48b5-960e-f25a2718a83a`
@@ -673,7 +673,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/HardcodedPassword/test` — Use of Hardcoded Passwords, CWE-798, CWE-259
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/jenkins/jenkins_test.go:141`
-- **Summary:** The Jenkins source test authenticates with the password `testpass` to a local mock server.
+- **Summary:** The Jenkins source test authenticates to a local mock server with an 8-character lowercase mock password.
 - **Verdict:** False positive
 - **Reasoning:** The credential at `pkg/sources/jenkins/jenkins_test.go:141` goes only to the `httptest` server from `createMockJenkinsServer` (`pkg/sources/jenkins/jenkins_test.go:50-52`, `pkg/sources/jenkins/jenkins_test.go:132-137`). Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[76]`, identity `a15cf4b6-e0d1-42e2-bdd7-d04bb1c0d560`
@@ -683,7 +683,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/HardcodedPassword/test` — Use of Hardcoded Passwords, CWE-798, CWE-259
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/jenkins/unit_test.go:121`
-- **Summary:** The Jenkins unit-test helper builds a connection with the password `testpass`.
+- **Summary:** The Jenkins unit-test helper builds a connection with the same 8-character lowercase mock password as #76.
 - **Verdict:** False positive
 - **Reasoning:** `newTestSource` sets the value at `pkg/sources/jenkins/unit_test.go:121` (`pkg/sources/jenkins/unit_test.go:113-124`), and its callers pass the URL of an `httptest` server (`pkg/sources/jenkins/unit_test.go:69`, `pkg/sources/jenkins/unit_test.go:149`). Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[77]`, identity `6820126e-5e46-45ad-8969-3a7b11d61401`
@@ -693,7 +693,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/HardcodedPassword/test` — Use of Hardcoded Passwords, CWE-798, CWE-259
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/detectors/jdbc/sqlserver_test.go:126`
-- **Summary:** `wantPassword` is the password a SQL Server JDBC parse test expects to extract, the word `testpassword`.
+- **Summary:** `wantPassword` is the password a SQL Server JDBC parse test expects to extract, a 12-character lowercase placeholder.
 - **Verdict:** False positive
 - **Reasoning:** `pkg/detectors/jdbc/sqlserver_test.go:126` is an expectation for parsing a `localhost` connection string (`pkg/detectors/jdbc/sqlserver_test.go:121-131`); nothing connects to a server. Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[78]`, identity `0fc2f6ad-621c-4a2a-8357-5d5fddc45f33`
@@ -763,7 +763,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/analyzer/analyzers/huggingface/huggingface_test.go:128`
-- **Summary:** A Hugging Face analyzer test sets the mock token owner's username to `testuser`.
+- **Summary:** A Hugging Face analyzer test sets the mock token owner's username to an 8-character lowercase placeholder.
 - **Verdict:** False positive
 - **Reasoning:** The value at `pkg/analyzer/analyzers/huggingface/huggingface_test.go:128` is part of mock token metadata for a result-shaping test (`pkg/analyzer/analyzers/huggingface/huggingface_test.go:125-127`); a username alone is not a secret. Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[14]`, identity `6770795a-10b3-42ae-8063-c4e2330f60a1`
@@ -773,7 +773,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/detectors/docker/docker_auth_config_test.go:217`
-- **Summary:** A `Test_ParseAuth` case sets the username field to the placeholder `my_username`.
+- **Summary:** A `Test_ParseAuth` case sets the username field to an 11-character placeholder made of two lowercase words joined by an underscore.
 - **Verdict:** False positive
 - **Reasoning:** The placeholder at `pkg/detectors/docker/docker_auth_config_test.go:217` is only parsed by `parseBasicAuth` (`pkg/detectors/docker/docker_auth_config_test.go:256`) and names no registry. Criterion: false positive, test-data clause (placeholder).
 - **SARIF reference:** `runs[0].results[15]`, identity `e0657f73-b437-4fe1-ae16-dda62ee4f6f4`
@@ -783,7 +783,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/detectors/docker/docker_auth_config_test.go:223`
-- **Summary:** The `Test_ParseAuth` case that combines an auth string with explicit fields uses the `my_username` placeholder.
+- **Summary:** The `Test_ParseAuth` case that combines an auth string with explicit fields sets the username field to the same 11-character placeholder as #15.
 - **Verdict:** False positive
 - **Reasoning:** The placeholder at `pkg/detectors/docker/docker_auth_config_test.go:223` belongs to the case at `pkg/detectors/docker/docker_auth_config_test.go:221-225`, which is only parsed (`pkg/detectors/docker/docker_auth_config_test.go:256`). Criterion: false positive, test-data clause (placeholder).
 - **SARIF reference:** `runs[0].results[16]`, identity `25389691-6c9d-4915-b0dd-d211a1f96095`
@@ -793,7 +793,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/github/github_integration_test.go:205`
-- **Summary:** A GitHub integration test expects chunks whose metadata names the account `truffle-sandbox`.
+- **Summary:** A GitHub integration test expects chunks whose metadata names the project's GitHub test account, a 15-character hyphenated username.
 - **Verdict:** False positive
 - **Reasoning:** The value at `pkg/sources/github/github_integration_test.go:205` is expected result metadata, not a credential; the test's real credentials come from the secret store at run time (`pkg/sources/github/github_integration_test.go:159-165`), and the file builds only with the `integration` tag (`pkg/sources/github/github_integration_test.go:1`). Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[17]`, identity `3410a927-626f-45d6-aacd-1737e8c19d09`
@@ -803,7 +803,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/github/github_integration_test.go:235`
-- **Summary:** The pull-request comment case of the same test expects the same `truffle-sandbox` account name.
+- **Summary:** The pull-request comment case of the same test expects the same test-account username.
 - **Verdict:** False positive
 - **Reasoning:** The value at `pkg/sources/github/github_integration_test.go:235` is expected metadata for a case whose token is `githubToken` from the secret store (`pkg/sources/github/github_integration_test.go:222-224`); the file builds only with the `integration` tag (`pkg/sources/github/github_integration_test.go:1`). Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[18]`, identity `ea6c86c3-2f5b-4e81-979e-75e8f941d60e`
@@ -813,7 +813,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/github/github_integration_test.go:1072`
-- **Summary:** An unauthenticated GitHub integration test expects the `truffle-sandbox` account name in chunk metadata.
+- **Summary:** An unauthenticated GitHub integration test expects the same test-account username in chunk metadata.
 - **Verdict:** False positive
 - **Reasoning:** The value at `pkg/sources/github/github_integration_test.go:1072` is expected metadata for a connection with no credential (`pkg/sources/github/github_integration_test.go:1062`), in a file built only with the `integration` tag (`pkg/sources/github/github_integration_test.go:1`). Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[19]`, identity `ac57cea9-008c-4907-82a8-8c3857992337`
@@ -823,7 +823,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/gitlab/gitlab_integration_test.go:245`
-- **Summary:** The GitLab "basic auth did not authenticate" case uses the username `bad-user`.
+- **Summary:** The GitLab "basic auth did not authenticate" case uses a deliberately wrong 8-character hyphenated username.
 - **Verdict:** False positive
 - **Reasoning:** The value at `pkg/sources/gitlab/gitlab_integration_test.go:245` is a negative case that must fail (`pkg/sources/gitlab/gitlab_integration_test.go:241-250`); the real tokens come from the secret store (`pkg/sources/gitlab/gitlab_integration_test.go:231-232`). Criterion: false positive, test-data clause (negative case).
 - **SARIF reference:** `runs[0].results[20]`, identity `252f2d7b-9a0a-4556-bea7-8de0b9c17b45`
@@ -833,7 +833,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/jenkins/jenkins_test.go:140`
-- **Summary:** The Jenkins source test logs in to a local mock server as `testuser`.
+- **Summary:** The Jenkins source test logs in to a local mock server with an 8-character lowercase mock username.
 - **Verdict:** False positive
 - **Reasoning:** The username at `pkg/sources/jenkins/jenkins_test.go:140` goes only to the `httptest` server from `createMockJenkinsServer` (`pkg/sources/jenkins/jenkins_test.go:50-52`, `pkg/sources/jenkins/jenkins_test.go:132-137`). Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[21]`, identity `85fcbc74-3f84-43e3-b844-0e67874191a6`
@@ -843,7 +843,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/jenkins/unit_test.go:120`
-- **Summary:** The Jenkins unit-test helper builds a connection for the user `testuser`.
+- **Summary:** The Jenkins unit-test helper builds a connection with the same 8-character lowercase mock username as #21.
 - **Verdict:** False positive
 - **Reasoning:** `newTestSource` sets the value at `pkg/sources/jenkins/unit_test.go:120` (`pkg/sources/jenkins/unit_test.go:113-124`), and its callers point it at an `httptest` server (`pkg/sources/jenkins/unit_test.go:69`, `pkg/sources/jenkins/unit_test.go:149`). Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[22]`, identity `c6f5c872-3d29-443d-bc5e-1b831e91919d`
@@ -853,7 +853,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/travisci/travisci_test.go:51`
-- **Summary:** The Travis CI source test expects chunk metadata naming the account `truffle-sandbox`.
+- **Summary:** The Travis CI source test expects chunk metadata naming the project's test account, the same 15-character username the GitHub integration tests expect (#17).
 - **Verdict:** False positive
 - **Reasoning:** The value at `pkg/sources/travisci/travisci_test.go:51` is expected metadata; the token the test uses comes from the secret store (`pkg/sources/travisci/travisci_test.go:20-24`). Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[23]`, identity `1e452103-0bde-41cf-b363-8d2998a94489`
@@ -883,7 +883,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/detectors/docker/docker_auth_config_test.go:222`
-- **Summary:** A `Test_ParseAuth` case supplies, as base64, the same `my_username` and `my_password` placeholders its explicit fields hold.
+- **Summary:** A `Test_ParseAuth` case supplies, as base64, the same two placeholders its explicit username and password fields hold.
 - **Verdict:** False positive
 - **Reasoning:** The value at `pkg/detectors/docker/docker_auth_config_test.go:222` encodes the placeholders set at `pkg/detectors/docker/docker_auth_config_test.go:223-224`, and the test only parses it (`pkg/detectors/docker/docker_auth_config_test.go:256`). Criterion: false positive, test-data clause (placeholder).
 - **SARIF reference:** `runs[0].results[26]`, identity `2abec70e-2827-41e0-a7d8-9a6b0a5b143a`
@@ -913,9 +913,9 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/detectors/jdbc/postgres_test.go:192`
-- **Summary:** A PostgreSQL connection-string test uses the default user name `postgres` for a `localhost` database.
+- **Summary:** A PostgreSQL connection-string test uses PostgreSQL's conventional 8-character superuser name as the user name for a `localhost` database.
 - **Verdict:** False positive
-- **Reasoning:** The value at `pkg/detectors/jdbc/postgres_test.go:192` is part of connection info for `localhost` and `testdb` that the test only formats into a string (`pkg/detectors/jdbc/postgres_test.go:181-193`); a user name is not a secret. Criterion: false positive, test-data clause.
+- **Reasoning:** The value at `pkg/detectors/jdbc/postgres_test.go:192` is part of connection info for a test database on `localhost` that the test only formats into a string (`pkg/detectors/jdbc/postgres_test.go:181-193`); a user name alone authenticates to nothing. Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[30]`, identity `43bdbdcc-9639-418c-867b-7925524a1387`
 
 #### Result #31 — go/NoHardcodedCredentials/test — pkg/sources/github/github_test.go:827
@@ -923,7 +923,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Rule:** `go/NoHardcodedCredentials/test` — Use of Hardcoded Credentials, CWE-798
 - **Severity:** Low (SARIF level `note`)
 - **Location:** `pkg/sources/github/github_test.go:827`
-- **Summary:** A GitHub source test caches a mock repository whose owner login is `cached-user`.
+- **Summary:** A GitHub source test caches a mock repository whose owner login is an 11-character hyphenated placeholder.
 - **Verdict:** False positive
 - **Reasoning:** The value at `pkg/sources/github/github_test.go:827` names the owner of a repository the test caches by hand to check that enumeration makes no duplicate API calls (`pkg/sources/github/github_test.go:820-831`); a login is not a secret. Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[31]`, identity `66f9ee6a-4c5b-4308-80ae-19e060f4397c`
@@ -965,7 +965,7 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 - **Location:** `pkg/detectors/privatekey/privatekey_test.go:103`
 - **Summary:** `encryptedUncrackablePattern` is a passphrase-protected ed25519 private key.
 - **Verdict:** False positive
-- **Reasoning:** The comment at `pkg/detectors/privatekey/privatekey_test.go:100-102` states that its passphrase is deliberately absent from the detector's wordlist, so the key at `pkg/detectors/privatekey/privatekey_test.go:103` cannot be unlocked; `TestPrivatekey_EncryptedKeyReported` only checks that it is still reported (`pkg/detectors/privatekey/privatekey_test.go:113-120`). Criterion: false positive, test-data clause.
+- **Reasoning:** The comment at `pkg/detectors/privatekey/privatekey_test.go:100-102` states that its passphrase is not in the detector's built-in wordlist, so `Crack`, which tries only that embedded list (`pkg/detectors/privatekey/cracker.go:12-18`, `pkg/detectors/privatekey/cracker.go:24-37`), cannot decrypt the key at `pkg/detectors/privatekey/privatekey_test.go:103`; the fixture supplies no passphrase, and the test ties the key to no service, account or host. `TestPrivatekey_EncryptedKeyReported` calls `FromData` with verification off and only checks that the key is still reported (`pkg/detectors/privatekey/privatekey_test.go:113-120`). Criterion: false positive, test-data clause.
 - **SARIF reference:** `runs[0].results[67]`, identity `0d7b1a3a-b0b7-4df4-a11b-54e48b92ff91`
 
 #### Result #66 — python/HardcodedNonCryptoSecret/test — backend/tests/test_parse.py:26
@@ -992,12 +992,12 @@ The remaining 47 false positives are credential-shaped literals in test files, d
 
 ## Blitzy remediation plan for true positives
 
-The prompt below covers the 12 true positives, #53–#63 and #65, in three changes, listed in the table. It is a proposal for a separate Blitzy run: it has not been run, and nothing in the repository has changed. The false positives need no change, and #27 is excluded until its manual review returns a verdict.
+The prompt below covers the 12 true positives, #53–#63 and #65, in three changes, listed in the table. It is a proposal for a separate Blitzy run: it has not been run, and the only change to the repository is the addition of this report; no source, test, configuration or A–C change has been made. The false positives need no change, and #27 is excluded until its manual review returns a verdict.
 
 | Change | Results | File changed | Fix |
 | --- | --- | --- | --- |
 | A, ngrok pagination origin | #53–#60 | `pkg/analyzer/analyzers/ngrok/requests.go` | In `fetchResources` (`pkg/analyzer/analyzers/ngrok/requests.go:190-209`), parse the URL and return an error unless its scheme is `https` and its host equals the host of `ngrokAPIBaseURL` (`pkg/analyzer/analyzers/ngrok/requests.go:14`). `makeAPIRequest` and the six loops stay as they are; every loop passes `res.NextPageURI` to `fetchResources` (`pkg/analyzer/analyzers/ngrok/requests.go:97` and the five matching lines), so one check covers all eight results. |
-| B, Docker local addresses | #61–#63 | `pkg/detectors/docker/docker_auth_config.go` | In `FromData`, replace the `common.SaneHttpClient()` fallback (`pkg/detectors/docker/docker_auth_config.go:127-131`) with `detectors.DetectorHttpClientWithNoLocalAddresses` (`pkg/detectors/http.go:40-45`) and drop the `pkg/common` import (`pkg/detectors/docker/docker_auth_config.go:16`), whose only use is that fallback; keep the injected `s.client` path. `verifyMatch` sends both requests on that client (`pkg/detectors/docker/docker_auth_config.go:165`, `pkg/detectors/docker/docker_auth_config.go:218`), its dial guard refuses loopback, link-local, private and unspecified addresses (`pkg/detectors/http.go:101-152`), and 49 other non-test detector files already use it. |
+| B, Docker local addresses | #61–#63 | `pkg/detectors/docker/docker_auth_config.go` | In `FromData`, replace the `common.SaneHttpClient()` fallback (`pkg/detectors/docker/docker_auth_config.go:127-131`) with `detectors.DetectorHttpClientWithNoLocalAddresses` (`pkg/detectors/http.go:40-45`) and drop the `pkg/common` import (`pkg/detectors/docker/docker_auth_config.go:16`), whose only use is that fallback; keep the injected `s.client` path. `verifyMatch` sends both requests on that client (`pkg/detectors/docker/docker_auth_config.go:165`, `pkg/detectors/docker/docker_auth_config.go:218`), and 49 other non-test detector files already use it. The client's dial guard resolves the host once and refuses the connection when any answer is a loopback, link-local, private or unspecified address (`pkg/detectors/http.go:101-107`, `pkg/detectors/http.go:142-149`). It then dials the hostname, not the checked address (`pkg/detectors/http.go:151`), and the hostname is resolved again, so a registry name that answers a public address to the check and a local one to the dial still reaches a local service. Change B therefore narrows #61–#63 but does not close them; closing the rebinding gap means dialling the checked address in `pkg/detectors/http.go`, which stays untouched, so that is left to the project owner. |
 | C, Jenkins TLS opt-in | #65 | `pkg/sources/jenkins/jenkins.go` | Keep `--insecure-skip-verify-tls` / `JENKINS_INSECURE_SKIP_VERIFY_TLS` (`main.go:262`), its wiring (`pkg/engine/jenkins.go:64`) and `roundtripper.WithInsecureTLS`. In `Source.Init`, when `conn.GetInsecureSkipVerifyTls()` is true (`pkg/sources/jenkins/jenkins.go:89-92`), log through `aCtx.Logger()` at default verbosity that certificate verification is disabled for this source. |
 
 ```text
@@ -1026,7 +1026,7 @@ VULNERABILITY ASSESSMENT
   - B, #61-#63: scanned content can make the scanner send blind GET requests, carrying the content's own credential, to internal and cloud-metadata addresses. SECURITY.md:4 and SECURITY.md:11-14 class this as hardening.
   - C, #65: once the operator enables the switch, a network attacker can intercept the Jenkins credentials.
 - What compliance frameworks apply?
-  None is named in the repository: a search for SOC 2, PCI-DSS and HIPAA matches only a checksum substring in go.sum. The internal standard that applies is the Blind SSRF & Outbound Request Policy in SECURITY.md:3-15.
+  None is named in the repository: a search of the tracked files for SOC 2, PCI-DSS and HIPAA, excluding results.sarif and this report (git grep -I -il -E 'SOC ?2|PCI[- ]DSS|HIPAA' -- ':!results.sarif' ':!snyk-findings-analysis.md'), matches only a checksum substring in go.sum. The internal standard that applies is the Blind SSRF & Outbound Request Policy in SECURITY.md:3-15.
 
 SCOPE
 
@@ -1048,7 +1048,7 @@ TECHNICAL IMPLEMENTATION
 
 - How should fixes be implemented?
   - Change A: in fetchResources, parse the URL with net/url and return an error, before any request is sent, unless the scheme is https and the host equals the host of ngrokAPIBaseURL (pkg/analyzer/analyzers/ngrok/requests.go:14). Leave makeAPIRequest and the six pagination loops unchanged; they all pass res.NextPageURI to fetchResources, so one check covers #53-#60.
-  - Change B: in FromData, replace the common.SaneHttpClient() fallback with detectors.DetectorHttpClientWithNoLocalAddresses and remove the pkg/common import, whose only use is that fallback; keep the injected s.client path. Behaviour change: the shared client follows no redirects and uses the 10 s detector timeout (pkg/detectors/http.go:25) instead of 5 s (pkg/common/http.go:245), so a registry that answers /v2/ with a redirect now yields a verification error, as it already does for the other detectors on that client.
+  - Change B: in FromData, replace the common.SaneHttpClient() fallback with detectors.DetectorHttpClientWithNoLocalAddresses and remove the pkg/common import, whose only use is that fallback; keep the injected s.client path. Behaviour change: the shared client follows no redirects and uses the detector timeout, 10 s by default (pkg/detectors/http.go:25) or the --detector-timeout value when the operator sets one (main.go:602-605, pkg/detectors/http.go:50-57), instead of 5 s (pkg/common/http.go:245), so a registry that answers /v2/ with a redirect now yields a verification error, as it already does for the other detectors on that client. Residual: the shared client's dial guard resolves the host once and refuses the connection when any answer is a loopback, link-local, private or unspecified address (pkg/detectors/http.go:101-107, pkg/detectors/http.go:142-149), then dials the hostname, which is resolved again (pkg/detectors/http.go:151), so a registry name that answers a public address to the check and a local one to the dial (DNS rebinding) still reaches a local service. When a request goes through a proxy taken from the environment (pkg/detectors/http.go:89), the guard checks the proxy's address, not the registry's. Change B therefore narrows #61-#63 but does not close them. Closing them means dialling the checked address and, for proxied requests, checking the registry's own address, both changes to pkg/detectors/http.go, so that decision is left to the project owner.
   - Change C: in Source.Init, when conn.GetInsecureSkipVerifyTls() is true, log through aCtx.Logger() at default verbosity that TLS certificate verification is disabled for this source. Residual: a re-scan still reports #65, because the insecure construct stays by design. Removing the switch would change the CLI and the sourcespb Jenkins message, so that decision is left to the project owner.
 - What dependencies need updating?
   None. All three changes are first-party code and go.mod stays unchanged; no finding names a vulnerable package.
@@ -1056,10 +1056,10 @@ TECHNICAL IMPLEMENTATION
 TESTING & VALIDATION
 
 - What security tests should verify the fixes?
-  - Change A: an offline unit test in pkg/analyzer/analyzers/ngrok/ showing that fetchResources returns an error before sending anything for an http://127.0.0.1:PORT URL served by httptest, for http://169.254.169.254/, for another https host and for http://api.ngrok.com/, with the httptest server recording no request.
+  - Change A: an offline unit test in pkg/analyzer/analyzers/ngrok/ that calls fetchResources for four URLs: an http://127.0.0.1:PORT URL served by httptest, http://169.254.169.254/, another https host and http://api.ngrok.com/. For the httptest URL, pass the server's own client. For the other three, pass an http.Client whose Transport is a fail-closed recording http.RoundTripper: it records every request it receives and returns an error without opening a connection. Assert that each call returns an error before anything is sent, that the recording transport records zero calls, and that the httptest server records no request, so a missing or regressed origin check fails the test without contacting any address outside the test process.
   - Change B: a unit test in pkg/detectors/docker/ in which a Scanner with no injected client runs FromData with verification on, for content whose auths key is the httptest server's http://127.0.0.1:PORT address; the result is unverified with a verification error, and the server records no request.
   - Change C: a unit test in pkg/sources/jenkins/ showing that the warning is logged when insecure_skip_verify_tls is set, and not otherwise.
-  - Scanner check: run SNYK_TOKEN=${SNYK_TOKEN} snyk code test --sarif-file-output=PATH, with PATH outside the repository. The new file must hold no go/Ssrf result in pkg/analyzer/analyzers/ngrok/requests.go or pkg/detectors/docker/docker_auth_config.go, must still hold the go/TooPermissiveTrustManager result in pkg/roundtripper/roundtripper.go (the change C residual), and must hold no ruleId and uri pair that results.sarif lacks. Do not compare line numbers, because the fixes move lines. Record, with its reason, any result Snyk still reports although its change is in place; do not suppress it.
+  - Scanner check: from the repository root, run OUT_DIR="$(mktemp -d)" and then SNYK_TOKEN=${SNYK_TOKEN} snyk code test --sarif-file-output="$OUT_DIR/snyk-rescan.sarif". mktemp -d creates a new, empty directory under the system temporary directory, so the output lands outside the checkout and never overwrites results.sarif. Exit code 1 (issues found) is expected, because #65 and the unchanged false positives remain. The new file must hold no go/Ssrf result in pkg/analyzer/analyzers/ngrok/requests.go or pkg/detectors/docker/docker_auth_config.go, must still hold the go/TooPermissiveTrustManager result in pkg/roundtripper/roundtripper.go (the change C residual), and must hold no ruleId and uri pair that results.sarif lacks. The absence of go/Ssrf in pkg/detectors/docker/docker_auth_config.go confirms only that the client swap is in place; it does not show the change B residual (DNS rebinding and proxied requests) closed. Do not compare line numbers, because the fixes move lines. Record, with its reason, any result Snyk still reports although its change is in place; do not suppress it.
 - What regression tests confirm existing functionality?
   - CGO_ENABLED=0 go test ./pkg/detectors/docker/ ./pkg/sources/jenkins/ runs the offline unit suites, including Test_ParseAuth (pkg/detectors/docker/docker_auth_config_test.go:205) and Test_ParseAuthenticateHeader (pkg/detectors/docker/docker_auth_config_test.go:271).
   - TEST_SECRET_FILE=${TEST_SECRET_FILE} CGO_ENABLED=0 go test ./pkg/analyzer/analyzers/ngrok/ runs TestAnalyzer_Analyze, which reads the NGROK key through common.GetSecret (pkg/analyzer/analyzers/ngrok/ngrok_test.go:22-27); GetSecret loads the dotenv file named by TEST_SECRET_FILE (pkg/common/secrets.go:46-49). Its output must still match expected_output.json, which also shows that change A accepts real api.ngrok.com pagination.
